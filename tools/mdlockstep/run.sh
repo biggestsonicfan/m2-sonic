@@ -2,12 +2,13 @@
 # tools/mdlockstep/run.sh: record MAME's Mega Drive (genesis) running the Sonic cartridge and
 # the i960 port (src/sonic.c under MAME's Model 2 driver) on the same input script, then
 # compare them frame by frame (compare.py).
-#   MAME     a MAME with both drivers (SOURCES=src/mame/sega/model2.cpp,src/mame/sega/mdconsole.cpp)
+#   MAME     a MAME with both drivers (docs/mame.md; default: the shared build)
 #   CART     the Sonic the Hedgehog cartridge image (.bin)
 #   ROMS_M2  a folder with sfight.zip, schamp.zip, segabill.zip
 #   GAME     the port's build dir (game.elf; the EPROMs are its roms/sonic/)
 #   LS_FRAMES (3000), LS_OUT (/tmp/mdlockstep)
 set -e
+MAME=${MAME:-$HOME/build/mame-bin/mame-shared/shared}
 here=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$here/../.." && pwd)
 export LS_TOOLS=$here LS_FRAMES=${LS_FRAMES:-3000} LS_OUT=${LS_OUT:-/tmp/mdlockstep}
 mkdir -p "$LS_OUT/roms/sfight"

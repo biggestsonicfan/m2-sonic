@@ -5,7 +5,7 @@ Drive (`genesis`, the reference) and once as the port (`sfight` with the port's 
 both on the same input script, and compares them frame by frame.
 
 ```sh
-MAME=~/build/mame-bin/m2md/m2md CART=Sonic_The_Hedgehog.bin ROMS_M2=/path/to/stock/roms \
+MAME=~/build/mame-bin/mame-shared/shared CART=Sonic_The_Hedgehog.bin ROMS_M2=/path/to/stock/roms \
 GAME=build LS_FRAMES=6000 tools/mdlockstep/run.sh
 ```
 

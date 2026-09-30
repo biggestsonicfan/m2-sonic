@@ -1,18 +1,17 @@
 # The MAME used
 
-Any MAME with the Model 2 driver runs the port (`sfight`, see the README). The checks used
-builds of [claude_mame](https://github.com/biggestsonicfan/mame) (MAME 0.289):
+Any MAME with the Model 2 driver runs the port (`sfight`, see the README). The checks use
+the shared build of [claude_mame](https://github.com/biggestsonicfan/mame): branch `shared`
+(upstream + every fork branch), built by `claude_mame/build-shared-mame.sh` with the Model 2,
+Mega Drive, Pac-Man and TN160 drivers in one binary:
 
-| Build | Source | For |
+| Build | Where | For |
 |---|---|---|
-| native, Model 2 + Mega Drive in one binary | branch `web-audio-latency`, `1be23f21bff` | `tools/mdlockstep` (`genesis` is the reference, `sfight` the port) and runs |
-| web (Emscripten), Model 2 | `ede4c2fa981` | Pinboard's `mame-m2` launcher |
+| native | `~/build/mame-bin/mame-shared/shared` | `tools/mdlockstep` (`genesis` is the reference, `sfight` the port) and runs |
+| web (Emscripten) | `~/build/mame-shared-wasm/shared.js` | Pinboard's `mame-m2` launcher |
 
-The lockstep binary:
-
-```sh
-make SUBTARGET=m2md SOURCES=src/mame/sega/model2.cpp,src/mame/sega/mdconsole.cpp -j2
-```
+Elsewhere, any MAME built with
+`SOURCES=src/mame/sega/model2.cpp,src/mame/sega/mdconsole.cpp` does for the lockstep.
 
 Stock roms needed: `sfight.zip`, `schamp.zip`, `segabill.zip` (the port replaces three of
 sfight's EPROMs, the rest comes from these), and the Sonic cartridge image for `genesis`.
