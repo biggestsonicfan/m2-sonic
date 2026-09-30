@@ -1,0 +1,9 @@
+build/
+roms/
+*.o
+*.elf
+game.map
+
+# ROM-derived data: make your own (tools/mdrom.py, tools/sonic_recomp.sh), never commit
+src/sonic_rom.h
+src/sonic_recomp.h
