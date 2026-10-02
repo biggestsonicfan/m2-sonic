@@ -46,16 +46,33 @@ The differences are transients, in busy frames (loading a zone, frames 24 and 64
 the VINT lands a few instructions earlier or later than on MAME, so it catches a loop in a
 different iteration (registers, a few words of the object table at `ffa500` and the stack),
 and a DMA/copy is at a different point (VRAM `c600`-`ed00`). The next frames agree again.
-The host interpreter (`tools/mdhost.c`) does the same, so it is not the recompiler: it is
-the interrupt timing against MAME. What is known of it:
+The host interpreter (`tools/mdhost.c`) does the same, so it is not the recompiler.
 
-- MAME's frame is 128005.7 68000 cycles; its IACKs come 128010 / 128000 cycles apart
-  (`vpa_sync`: autovectors wait for the E clock's 10-cycle grid).
-- MAME raises VINT 32 x 4 master clocks after the line starts (18 68000 cycles).
+### Interrupt timing (3000 frames, measured 2026-10-02)
 
-`md_hw.h` has both as experiments, off by default: `MD_VINT_DELAY` and
-`MD_E_PHASE`/`MD_E_ADJ`. They are not finished; with them set the frames do not yet all
-agree.
+Both sides now record the 68000's time at each interrupt: MAME's cycle count at the
+acknowledge bus cycle (`device.total_cycles`, from claude_mame's `md-lockstep` branch, in the
+shared build) in `ref_iack.bin`, the port's `md_now()` as it takes the interrupt in
+`port_iack.bin`. Both count from power-on, so the times compare directly:
+
+- Frame lengths agree: MAME's acknowledges come 128000 / 128010 cycles apart (`vpa_sync`
+  puts every autovector acknowledge on the E clock's 10-cycle grid) and the port's 128005 /
+  128006; both average 128005.7 (262 x 3420 / 7).
+- MAME acknowledges 22-36 cycles after the port takes the VINT (median 25, within 10 of that
+  in 2164 of 3000 frames): the VDP raises VINT 18 cycles into line 224, then the 68000
+  finishes its instruction, starts the exception and waits for the E edge. The port takes it
+  exactly at line 224 (cycle 109440 of the frame) because it skips `WaitForVBla` idling.
+- The register differences are **not** this lead. With `MD_VINT_DELAY=18` and with
+  `MD_VINT_DELAY=18 MD_E_PHASE=0` the same 27 frames differ, in the same way. They are frame
+  24 (boot), 476 and 626-650 (a zone loading). In those frames the VINT interrupts
+  decompression code (`0x17ac`-`0x1928`, `0x6ae6`-`0x6c12`) with the port a loop iteration
+  or two ahead or behind, so per-instruction timing differs. The port's 68000 times
+  instructions like Musashi, while MAME's `genesis` uses MAME's newer 68000 core, which
+  times some instructions differently.
+  The state converges by frame 651 and nothing visible or audible differs.
+
+So `MD_VINT_DELAY` / `MD_E_PHASE` / `MD_E_ADJ` stay off (0 / -1 / 0). Matching those frames
+would mean matching MAME's 68000 core cycle for cycle, which buys nothing on screen.
 
 Fixes this found (now in the port): the YM2612 busy flag (192 cycles, ymfm) and the Z80-bus
 wait state, which had put the whole game one frame behind from boot; MAME's sprite masking

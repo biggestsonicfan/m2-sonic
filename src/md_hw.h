@@ -127,9 +127,9 @@ static inline void md_update_irq(void) {
     if (m68k_irq_pending()) md_irq_new = 1;
 }
 /* every interrupt the 68000 takes, as it takes it (before the exception frame), for
- * tools/mdlockstep: registers, level, frame; `count` is written last (a write tap there
- * sees a complete record). `used`: only the lockstep reads it, from outside. */
-typedef struct { u32 d[8], a[8], pc, sr, usp, level, frame, count; } md_irq_snap_t;
+ * tools/mdlockstep: registers, level, frame, the 68000 time (md_now); `count` is written
+ * last (a write tap there sees a complete record). `used`: only the lockstep reads it. */
+typedef struct { u32 d[8], a[8], pc, sr, usp, level, frame, count, cyc; } md_irq_snap_t;
 static md_irq_snap_t md_irq_snap __attribute__((used));
 static u32 md_frames;
 static void md_irq_record(int level) {
@@ -137,7 +137,7 @@ static void md_irq_record(int level) {
     int i;
     for (i = 0; i < 8; i++) { s[i] = m68k.d[i]; s[8 + i] = m68k.a[i]; }
     s[16] = m68k.pc; s[17] = m68k_get_sr(); s[18] = m68k.s ? m68k.osp : m68k.a[7];
-    s[19] = (u32)level; s[20] = md_frames;
+    s[19] = (u32)level; s[20] = md_frames; s[22] = md_now();
     s[21] = s[21] + 1;
 }
 
