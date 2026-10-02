@@ -77,6 +77,11 @@ M2_API u32 m2_scsp_pending(void) { return (m2_scsp_qt - m2_scsp_qh) & (M2_SCSP_Q
  * line's full rate. Needs src/i_handle.s, this repo's copy of the SDK's, whose vector-15
  * handler (_other_irq) calls m2_other_irq_c below instead of just returning. */
 static u8 m2_scsp_irq;
+/* the SDK's m2_irq_off/on have no "memory" clobber: without these GCC loads m2_scsp_qh
+ * before masking, and if the interrupt sends a byte in between, the pump below sends a
+ * stale one and moves the head past the tail (the whole ring sent again, notes lost) */
+#define M2__SCSP_LOCK()   do { m2_irq_off(); __asm__ volatile ("" ::: "memory"); } while (0)
+#define M2__SCSP_UNLOCK() do { __asm__ volatile ("" ::: "memory"); m2_irq_on(); } while (0)
 M2_API void m2_other_irq_c(void) {
     u32 i;
     M2_IRQ_REQ = ~0x400u;                       /* ack bit 10 (the request register is AND-ed) */
@@ -90,17 +95,17 @@ M2_API void m2_other_irq_c(void) {
 M2_API void m2_scsp_irq_start(void) {
     m2_scsp_irq = 1;
     M2_WRITE_TWICE(M2_IRQ_ENA, M2_IRQ_VBL | 0x400u);
-    m2_irq_off(); m2_scsp_pump(); m2_irq_on();
+    M2__SCSP_LOCK(); m2_scsp_pump(); M2__SCSP_UNLOCK();
 }
 
 static void m2__scsp_put(u8 b) {
     while (m2_scsp_pending() == M2_SCSP_QLEN - 1u) {                   /* full: drain */
-        if (m2_scsp_irq) { m2_irq_off(); m2_scsp_pump(); m2_irq_on(); } else m2_scsp_pump();
+        if (m2_scsp_irq) { M2__SCSP_LOCK(); m2_scsp_pump(); M2__SCSP_UNLOCK(); } else m2_scsp_pump();
     }
     m2_scsp_q[m2_scsp_qt] = b;
     m2_scsp_qt = (m2_scsp_qt + 1u) & (M2_SCSP_QLEN - 1u);
     /* the UART idle (no interrupt coming): start it */
-    if (m2_scsp_irq && (M2_SND_CTL & 0x01u)) { m2_irq_off(); m2_scsp_pump(); m2_irq_on(); }
+    if (m2_scsp_irq && (M2_SND_CTL & 0x01u)) { M2__SCSP_LOCK(); m2_scsp_pump(); M2__SCSP_UNLOCK(); }
 }
 
 /* SCSP register write: word at SCSP offset `reg` (0x000-0xFFE) = v. */
