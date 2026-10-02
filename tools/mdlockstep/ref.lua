@@ -6,6 +6,8 @@
 -- sound command (0xA01FFF): ref_snd.bin (frame u32, kind u8 1 YM / 2 PSG / 3 command,
 -- port u8, register u8, value u8). The pad (0xA10003) is fed from inputs.lua, frame k = the
 -- VINTs so far + 1. Pictures: ref_NNNNN.rgb (320 x 224 x RGB) for frames k % 60 < 5.
+-- ref_iack.bin: frame u32, level u32, the 68000's cycle count at the acknowledge u64, when
+-- the MAME has device.total_cycles (claude_mame's md-lockstep branch, in the shared build).
 local tools = os.getenv("LS_TOOLS") or "tools/mdlockstep"
 dofile(tools .. "/inputs.lua")
 local cpu = manager.machine.devices[":maincpu"]
@@ -16,6 +18,7 @@ local scr = manager.machine.screens[":megadriv"]
 local irq = assert(io.open(LS_OUT .. "/ref_irq.bin", "wb"))
 local mem = assert(io.open(LS_OUT .. "/ref_mem.bin", "wb"))
 local snd = assert(io.open(LS_OUT .. "/ref_snd.bin", "wb"))
+local iack = cpu.total_cycles and assert(io.open(LS_OUT .. "/ref_iack.bin", "wb"))
 local vints, done, th = 0, false, 0x40
 local ym_addr = { 0, 0 }
 
@@ -38,13 +41,14 @@ LS_IACK = cs:install_read_tap(0xfffff0, 0xffffff, "ls_iack", function(offset, da
   t[#t + 1] = string.pack("<I4", reg("SP"))                          -- A7
   t[#t + 1] = string.pack("<I4I4I4", reg("PC"), reg("SR"), reg("USP"))
   irq:write(table.concat(t))
+  if iack then iack:write(string.pack("<I4I4I8", vints + 1, level, cpu.total_cycles)) end
   if level == 6 then
     vints = vints + 1
     local m = {}
     for a = 0xff0000, 0xfffffc, 4 do m[#m + 1] = string.pack(">I4", sp:read_u32(a)) end
     m[#m + 1] = words(VRAM, 0x8000); m[#m + 1] = words(CRAM, 64); m[#m + 1] = words(VSRAM, 40); m[#m + 1] = bytes(REGS, 24)
     mem:write(table.concat(m))
-    if vints >= LS_FRAMES then done = true; irq:close(); mem:close(); snd:close(); manager.machine:exit() end
+    if vints >= LS_FRAMES then done = true; irq:close(); mem:close(); snd:close(); if iack then iack:close() end; manager.machine:exit() end
   end
 end)
 

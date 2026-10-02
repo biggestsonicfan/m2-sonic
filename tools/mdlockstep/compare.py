@@ -3,6 +3,7 @@
 i960 port (port_*), frame by frame (frame k = the k-th VINT, both run the same inputs).
 
   registers   d0-d7 a0-a7 pc sr usp as each interrupt is taken
+  timing      the 68000 cycle each VINT is acknowledged at (ref_iack / port_iack)
   memory      at each VINT: work RAM, VRAM, CRAM, VSRAM, the VDP's 24 registers
   sound       the YM2612 / PSG writes and Z80 sound commands the 68000 made, per frame
   pictures    the 320x224 picture (ref: MAME's Mega Drive screen, port: the Model 2
@@ -32,6 +33,35 @@ def irqs(b):
 
 
 def section(t): print('\n== ' + t)
+
+
+def iacks(b):     # frame -> 68000 cycles at the VINT's acknowledge
+    return {f: c for f, l, c in (struct.unpack_from('<IIQ', b, i) for i in range(0, len(b) - 15, 16)) if l == 6}
+
+
+def timing():
+    """VINT times: MAME's 68000 cycle count at the acknowledge bus cycle (device.total_cycles)
+    vs the port's md_now() as it takes the interrupt, which is earlier: the exception's first
+    cycles and the E-clock wait (vpa_sync) come between. Each side counts from its first
+    common VINT, so a steady lead shows as a constant; the spread around it is the timing."""
+    r, p = iacks(rd('ref_iack.bin')), iacks(rd('port_iack.bin'))
+    common = sorted(set(r) & set(p))
+    if len(common) < 2:
+        print('\n(no interrupt timing: needs ref_iack.bin, a MAME with device.total_cycles)'); return
+    section('VINT acknowledge times (68000 cycles, %d frames)' % len(common))
+    k0 = common[0]
+    off = [((p[k] - p[k0]) & 0xffffffff) - (r[k] - r[k0]) for k in common]
+    so = sorted(off); med = so[len(so) // 2]
+    near = sum(1 for d in off if abs(d - med) <= 10)
+    print('port - ref: min %d, median %d, max %d; within 10 cycles of the median in %d of %d frames'
+          % (so[0], med, so[-1], near, len(off)))
+    for name, t in (('ref', r), ('port', p)):
+        iv = {}
+        for a, b in zip(common, common[1:]):
+            if b == a + 1: d = (t[b] - t[a]) & 0xffffffff; iv[d] = iv.get(d, 0) + 1
+        print('%-4s intervals: %s' % (name, ', '.join('%d x%d' % kv for kv in sorted(iv.items(), key=lambda x: -x[1])[:6])))
+    bad = [(k, d - med) for k, d in zip(common[1:], off[1:]) if abs(d - med) > 10]
+    if bad: print('first further off: frame %d, %+d cycles from the median' % bad[0])
 
 
 def main():
@@ -67,6 +97,8 @@ def main():
     if first:
         k, bad, r, p = first
         print('first at frame %d: %s' % (k, ' '.join('%s ref %08x port %08x' % (n, r[REGN.index(n)], p[REGN.index(n)]) for n in bad)))
+
+    timing()
 
     rm, pm = rd('ref_mem.bin'), rd('port_mem.bin')
     n = min(len(rm), len(pm)) // MEM

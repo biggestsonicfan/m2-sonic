@@ -8,7 +8,8 @@
 --   picture being built), k % 60 < 5 -> port_NNNNN.rgb, with the VDP state it was made
 --   from (port_NNNNN.mem).
 -- Frames are counted in VINTs taken (the reference counts them; the boot runs frames
--- without). The pad: md_pad written as each VINT is taken, for its handler to read. Every SCSP register write the sound board makes:
+-- without). port_iack.bin: frame u32, level u32, the port's 68000 time (md_now) u64.
+-- The pad: md_pad written as each VINT is taken, for its handler to read. Every SCSP register write the sound board makes:
 -- port_scsp.bin (time f64, register u16, value u16).
 local tools = os.getenv("LS_TOOLS") or "tools/mdlockstep"
 if LS_PORT then return end
@@ -26,6 +27,7 @@ local irq = assert(io.open(LS_OUT .. "/port_irq.bin", "wb"))
 local mem = assert(io.open(LS_OUT .. "/port_mem.bin", "wb"))
 local sout = assert(io.open(LS_OUT .. "/port_snd.bin", "wb"))
 local wout = assert(io.open(LS_OUT .. "/port_scsp.bin", "wb"))
+local iack = assert(io.open(LS_OUT .. "/port_iack.bin", "wb"))
 local done, vints, shown, last = false, 0, -1, -1
 local vint_of = {}                                   -- the port's frame -> the VINTs by its end
 local S = SYM._md_irq_snap
@@ -49,13 +51,14 @@ LS_IRQ = sp:install_write_tap(S + 21 * 4, S + 21 * 4 + 3, "ls_irq", function(off
   for i = 0, 15 do t[#t + 1] = string.pack("<I4", sp:read_u32(S + i * 4)) end
   for i = 16, 18 do t[#t + 1] = string.pack("<I4", sp:read_u32(S + i * 4)) end
   irq:write(table.concat(t))
+  iack:write(string.pack("<I4I4I8", level == 6 and vints or vints + 1, level, sp:read_u32(S + 22 * 4)))
   if level == 6 then
     local m = { w16(SYM._md_ram, 0x8000), w16(SYM._md_vram, 0x8000), w16(SYM._md_cram, 64), w16(SYM._md_vsram, 40) }
     local r = {}
     for i = 0, 23 do r[#r + 1] = string.char(sp:read_u8(SYM._md_reg + i)) end
     m[#m + 1] = table.concat(r)
     mem:write(table.concat(m))
-    if vints >= LS_FRAMES then done = true; irq:close(); mem:close(); sout:close(); wout:close(); manager.machine:exit() end
+    if vints >= LS_FRAMES then done = true; irq:close(); mem:close(); sout:close(); wout:close(); iack:close(); manager.machine:exit() end
   end
 end)
 
