@@ -9,6 +9,17 @@ MAME=~/build/mame-bin/mame-shared/shared CART=Sonic_The_Hedgehog.bin ROMS_M2=/pa
 GAME=build LS_FRAMES=6000 tools/mdlockstep/run.sh
 ```
 
+## Watching it
+
+`tools/mdlockstep/live.sh` (same variables, `DISPLAY` set, no `LS_FRAMES`) opens the two
+side by side instead of recording: MAME's `genesis` with the cartridge on the left, the
+port under `sfight` on the right, both playing `inputs.lua`. `live.lua` keeps them on the
+same frame: at each VINT a side writes its count to `$LIVE_DIR/<side>.cnt` and the one
+ahead waits for the other. Each screen shows its frame number. The pair runs at about 52
+frames a second. The port shows ~18 pictures a second, so its picture can be a frame or
+two behind its own frame number. Close either window and the other runs on alone after
+10 seconds.
+
 ## What is recorded
 
 Frames are counted by VINTs taken, on both sides; the pad (`inputs.lua`: title, START, then
