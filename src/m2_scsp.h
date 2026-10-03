@@ -82,6 +82,14 @@ static u8 m2_scsp_irq;
  * stale one and moves the head past the tail (the whole ring sent again, notes lost) */
 #define M2__SCSP_LOCK()   do { m2_irq_off(); __asm__ volatile ("" ::: "memory"); } while (0)
 #define M2__SCSP_UNLOCK() do { __asm__ volatile ("" ::: "memory"); m2_irq_on(); } while (0)
+/* The interrupt is on only while bytes wait: an idle UART keeps TxRDY up, and MAME's i8251
+ * signals it again at every bit clock, so left on it interrupted the i960 ~480 times a frame
+ * (31250 baud) for nothing: 11% of its time in busy scenes. */
+static volatile u8 m2_scsp_ien;
+static void m2__scsp_ien(u32 on) {
+    m2_scsp_ien = (u8)on;
+    M2_WRITE_TWICE(M2_IRQ_ENA, M2_IRQ_VBL | (on ? 0x400u : 0u));
+}
 M2_API void m2_other_irq_c(void) {
     u32 i;
     M2_IRQ_REQ = ~0x400u;                       /* ack bit 10 (the request register is AND-ed) */
@@ -90,12 +98,12 @@ M2_API void m2_other_irq_c(void) {
      * always reads RxRDY) */
     for (i = 0; i < 4u && (M2_SND_CTL & 0x02u); i++) (void)M2_SND_DATA;
     m2_scsp_pump();
+    if (m2_scsp_qh == m2_scsp_qt) m2__scsp_ien(0);   /* all sent: off until the next byte */
 }
 /* after m2_scsp_probe: sending from the interrupt from now on (pump no more from outside) */
 M2_API void m2_scsp_irq_start(void) {
     m2_scsp_irq = 1;
-    M2_WRITE_TWICE(M2_IRQ_ENA, M2_IRQ_VBL | 0x400u);
-    M2__SCSP_LOCK(); m2_scsp_pump(); M2__SCSP_UNLOCK();
+    M2__SCSP_LOCK(); m2_scsp_pump(); m2__scsp_ien(m2_scsp_qh != m2_scsp_qt); M2__SCSP_UNLOCK();
 }
 
 static void m2__scsp_put(u8 b) {
@@ -104,8 +112,13 @@ static void m2__scsp_put(u8 b) {
     }
     m2_scsp_q[m2_scsp_qt] = b;
     m2_scsp_qt = (m2_scsp_qt + 1u) & (M2_SCSP_QLEN - 1u);
-    /* the UART idle (no interrupt coming): start it */
-    if (m2_scsp_irq && (M2_SND_CTL & 0x01u)) { M2__SCSP_LOCK(); m2_scsp_pump(); M2__SCSP_UNLOCK(); }
+    /* the interrupt off (the queue was empty): send what the UART takes now, and turn it on
+     * for the rest */
+    if (m2_scsp_irq && !m2_scsp_ien) {
+        M2__SCSP_LOCK();
+        if (!m2_scsp_ien) { m2_scsp_pump(); if (m2_scsp_qh != m2_scsp_qt) m2__scsp_ien(1); }
+        M2__SCSP_UNLOCK();
+    }
 }
 
 /* SCSP register write: word at SCSP offset `reg` (0x000-0xFFE) = v. */

@@ -125,7 +125,17 @@ static u32 md_ym_busy_end;              /* the YM2612 is busy until then */
 static u32 md_waits;                    /* wait-state cycles the board added (tools/mdlock) */
 #define MD_YM_BUSY 192                  /* ymfm: 32 x prescale 6 clocks of its 7.67 MHz */
 static inline u32 md_now(void) { return md_clock_base - (u32)m68k.cycles; }
+#ifndef MD_NO_Z80_TIMING
 #include "md_z80.h"                    /* the Z80 sound driver's timing: $A01FFD */
+#else
+/* -DMD_NO_Z80_TIMING: no Z80 timing, the YM2612 never busy: the 68000's sound driver never
+ * waits, so the game runs faster than MAME's and no longer in step with it */
+#define mz_sync()       ((void)0)
+#define mz_busreq(r)    ((void)0)
+#define mz_reset_w(r)   ((void)0)
+#define mz_frame()      ((void)0)
+#define mz_init()       ((void)0)
+#endif
 
 /* ---- interrupts ------------------------------------------------------------------------ */
 /* MAME: the level-6 line is up while a VINT is pending and register 1 enables it; the
@@ -388,7 +398,11 @@ static __attribute__((noinline)) u32 md_rd_slow(u32 a, int word) {
     if (a < 0xa10000) {                                 /* Z80 space */
         m68k.cycles -= 1; md_waits++;                    /* MAME: a wait state on the Z80 bus */
         if (a >= 0xa04000 && a < 0xa06000)              /* YM2612 status: busy after a write */
+#ifndef MD_NO_Z80_TIMING
             return (int)(md_ym_busy_end - md_now()) > 0 ? 0x80 : 0;
+#else
+            return 0;
+#endif
         if (a < 0xa02000 || (a >= 0xa02000 && a < 0xa04000)) {
             u32 o = a & 0x1fff;
             mz_sync();

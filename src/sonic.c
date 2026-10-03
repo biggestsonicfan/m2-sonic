@@ -45,7 +45,9 @@ static u32 md_insns;                    /* 68000 instructions run (the panel's s
 
 #define MD_HZ    59923u                 /* Mega Drive NTSC frame rate, mHz (53.693175 MHz / 3420 / 262) */
 #define M2_HZ    57524u                 /* Model 2 vblank rate, mHz (16 MHz / 656 / 424) */
+#ifndef MD_CATCH_UP
 #define MD_CATCH_UP 4                   /* Mega Drive frames run at most between two pictures */
+#endif
 
 /* The tile palette goes through the colour-translation table: each 5-bit channel c reads
  * colorxlat row c, pen 0x40 (MAME sega/model2.cpp palette_w). m2_init's table saturates
@@ -119,7 +121,9 @@ int main(void) {
     s24_text(11, 42, "68K K");
     s24_text(28, 42, "VIDEO K");
     s24_text(11, 44, "68K/FRAME");
+#ifndef SONIC_NO_SOUND                  /* -DSONIC_NO_SOUND: silent, as with the stock sound EPROM */
     snd_init();                         /* waits up to 1.5 s for the relay to answer */
+#endif
     s24_text(11, 7, snd_ok ? "SCSP SOUND" : "NO SOUND");
     M2_TIMER3 = 0xffffffffu;
 

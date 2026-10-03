@@ -41,6 +41,10 @@ target_include_directories(game.elf PRIVATE src "${M2_SDK}/src")
 target_compile_options(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2>)
 # a lone game .c: m2.h's boot stubs must be global (see the SDK's CMakeLists.txt)
 target_compile_definitions(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:M2_API=>)
+set(SONIC_DEFS "" CACHE STRING "Extra -D for the game (e.g. MD_NO_Z80_TIMING;SONIC_NO_SOUND)")
+if(SONIC_DEFS)
+    target_compile_definitions(game.elf PRIVATE ${SONIC_DEFS})
+endif()
 set_target_properties(game.elf PROPERTIES SUFFIX "")
 target_link_options(game.elf PRIVATE
     -nostdlib
