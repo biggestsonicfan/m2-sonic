@@ -17,6 +17,8 @@
  *                prefix.pc (8M x u32 executions per word address) and prefix.ent (8M x u32
  *                arrivals by a jump, branch, return or interrupt), for tools/m68krecomp.py
  *   -A           with -P: add to the prefix's files if they exist (one profile, many runs)
+ *   -t out.bin   trace: for each instruction and interrupt, u32 md_now() and u32 PC (bit 31
+ *                set: an interrupt taken, PC the level), for comparing timing with MAME
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,8 +32,10 @@ static u32 *prof_op, *prof_pc;          /* -P: executions per opcode and per PC 
 static u32 *prof_ent;                   /* ... and arrivals at a PC other than by falling through */
 static u32 prof_next = 0xffffffffu;     /* where the last instruction would fall through to */
 static void prof_step(void);
-#define MD_INTERRUPT() m68k_interrupt()
-#define MD_STEP()      (md_insns++, prof_op ? prof_step() : m68k_step())
+static FILE *trace;                     /* -t */
+static void trace_step(int irq);
+#define MD_INTERRUPT() (trace ? trace_step(1) : (void)0, m68k_interrupt())
+#define MD_STEP()      (md_insns++, trace ? trace_step(0) : (void)0, prof_op ? prof_step() : m68k_step())
 #include "md_hw.h"
 #include "md_render.h"
 
@@ -48,6 +52,13 @@ static void prof_step(void) {
     else if ((op & 0xff80) == 0x4e80 || (op & 0xfff0) == 0x4e40 || op == 0x4e73 || op == 0x4e75
              || op == 0x4e77 || op == 0x4e72) prof_next = 0xffffffffu;   /* JSR JMP TRAP RTE RTS RTR STOP */
     else prof_next = m68k.pc;
+}
+
+static void trace_step(int irq) {
+    u32 r[2];
+    r[0] = md_now();
+    r[1] = irq ? 0x80000000u | (u32)(m68k.irq & 7) : m68k.pc & 0xffffff;
+    fwrite(r, 4, 2, trace);
 }
 
 static void write_ppm(const char *path) {
@@ -89,6 +100,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-s")) stats = 1;
         else if (!strcmp(argv[i], "-P") && i + 1 < argc) profout = argv[++i];
         else if (!strcmp(argv[i], "-A")) accum = 1;
+        else if (!strcmp(argv[i], "-t") && i + 1 < argc) {
+            if (!(trace = fopen(argv[++i], "wb"))) { perror(argv[i]); return 1; }
+        }
         else { fprintf(stderr, "usage: see tools/mdhost.c\n"); return 2; }
     }
     if (sumout && !(sums = fopen(sumout, "w"))) { perror(sumout); return 1; }

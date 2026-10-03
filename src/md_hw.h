@@ -12,9 +12,11 @@
  *   md_rom[]      the ROM as 16-bit words (MSB = the even byte), MD_ROM_WORDS of them
  * (tools/mdrom.py writes src/sonic_rom.h from the cartridge image).
  *
- * Timing is MAME's: 262 lines of 3420 master clocks, the 68000 at MCLK/7 (488.57 cycles a
- * line); VINT (level 6) at line 224, HINT (level 4) from the line counter in register 10;
- * DMA is instant and does not stall the 68000 (MAME's insta_68k_to_vram_dma).
+ * Timing is MAME's: 262 lines of 3420 master clocks (53693175 Hz), the 68000 at 7670453 Hz
+ * (MCLK/7, which MAME's integer clock rounds down: 488.57 cycles a line, falling 0.0095 a
+ * frame behind MCLK/7); VINT (level 6) at line 224, HINT (level 4) from the line counter in register 10;
+ * DMA is instant (MAME's insta_68k_to_vram_dma); like MAME, a 68000 -> VRAM DMA of N bytes
+ * stops the 68000 for N*1000/3500 ns, in whole cycles (MAME's scheduler drops the rest).
  * The Z80 is not run: the 68000 gets its bus at once, sees the YM2612 never busy, and every
  * YM2612 / PSG write is queued in md_snd[] for the host to play (src/sonic.c: the SCSP).
  */
@@ -24,8 +26,12 @@
 #define MD_LINES        262
 #define MD_VIS_LINES    224
 #define MD_MCLK_LINE    3420            /* master clocks per line; the 68000 runs at MCLK/7 */
-#ifndef MD_VINT_DELAY
-#define MD_VINT_DELAY   0               /* MAME: 32 x 4 master clocks = 18 (tools/mdlockstep) */
+#define MD_MCLK_HZ      53693175u
+#define MD_CPU_HZ       7670453u        /* MAME's clock for the 68000: MCLK/7, an integer */
+/* MAME takes VINT after the first 68000 instruction that ends MD_VINT_MCLK master clocks
+ * or more into line 224 (its traces: 148.05 < MD_VINT_MCLK <= 149.6) */
+#ifndef MD_VINT_MCLK
+#define MD_VINT_MCLK    149
 #endif
 
 /* ---- board state ------------------------------------------------------------------- */
@@ -83,7 +89,13 @@ static inline void md_mark_tile(u32 byteaddr) {
  * loop fast-forwards to it (md_idle). Found by its bytes, like pacman's. */
 static u32 md_idle_pc = 0xffffffffu;
 static u8  md_idle;
-#define M68K_BCC_TAKEN(target) do { if ((target) == md_idle_pc) { md_idle = 1; m68k.cycles = 0; } } while (0)
+static u32 md_idle_t;                   /* when the loop's tst.b began (md_now) */
+static u16 md_idle_var;                 /* the byte it tests (RAM offset) */
+/* still waiting: an interrupt taken between the tst.b and the bne.s returns to the bne
+ * with the old flags, which branches once more before the tst.b sees the byte cleared */
+#define md_idle_wait() ((md_ram[md_idle_var >> 1] >> (md_idle_var & 1 ? 0 : 8)) & 0xff)
+#define M68K_BCC_TAKEN(target) do { if ((target) == md_idle_pc && md_idle_wait()) { \
+    md_idle_t = md_clock_base - (u32)m68k.cycles; md_idle = 1; m68k.cycles = 0; } } while (0)
 
 static inline u32 md_rd8(u32 a);
 static inline u32 md_rd16(u32 a);
@@ -99,6 +111,8 @@ static int md_irq_ack(int level);
 #define M68K_FETCH16(a)  md_rd16(a)
 #endif
 #define M68K_IACK(l)     md_irq_ack(l)
+#define M68K_TAS_WR8(a, v) ((void)0)    /* MAME's megadriv_tas_callback: no write-back */
+static u32 md_clock_base;               /* 68000 time: md_clock_base - m68k.cycles */
 #include "m2_m68k.h"
 /* MD_INTERRUPT() / MD_STEP(): take the pending interrupt / run one instruction (hookable) */
 #ifndef MD_STEP
@@ -107,11 +121,11 @@ static int md_irq_ack(int level);
 #endif
 
 /* 68000 time in cycles, monotonic: md_clock_base - m68k.cycles (md_run adds each slice) */
-static u32 md_clock_base;
 static u32 md_ym_busy_end;              /* the YM2612 is busy until then */
 static u32 md_waits;                    /* wait-state cycles the board added (tools/mdlock) */
 #define MD_YM_BUSY 192                  /* ymfm: 32 x prescale 6 clocks of its 7.67 MHz */
 static inline u32 md_now(void) { return md_clock_base - (u32)m68k.cycles; }
+#include "md_z80.h"                    /* the Z80 sound driver's timing: $A01FFD */
 
 /* ---- interrupts ------------------------------------------------------------------------ */
 /* MAME: the level-6 line is up while a VINT is pending and register 1 enables it; the
@@ -146,7 +160,7 @@ static void md_irq_record(int level) {
  * one after, if 7 or more cycles in), then 1 more. MD_E_PHASE: where the grid falls against
  * md_now() (-1: not modelled); MD_E_ADJ: the cycles that are not the wait. */
 #ifndef MD_E_PHASE
-#define MD_E_PHASE (-1)
+#define MD_E_PHASE 0
 #endif
 #ifndef MD_E_ADJ
 #define MD_E_ADJ 0
@@ -198,6 +212,10 @@ static __attribute__((noinline)) void md_dma(void) {
         u32 len = ((u32)md_reg[19] | ((u32)md_reg[20] << 8)) << 1, n;
         u32 code = md_vcode & 0xf;
         if (len == 0) len = 0xffff;
+        if (code == 1) {                                /* the stall: ns * 53693175 / 7e9, in 32 bits */
+            u32 ns = len * 1000u / 3500u, q = ns * 2147u;
+            m68k.cycles -= (int)(q / 280000u + ((q % 280000u) * 1000u + ns * 727u) / 280000000u);
+        }
         n = 0;
         /* the usual case, a block to VRAM with increment 2: a plain copy, tiles marked once */
         if (code == 1 && md_reg[15] == 2 && !(md_vaddr & 1)) {
@@ -366,12 +384,14 @@ static u8 md_pad_r(int n) {
 
 static __attribute__((noinline)) u32 md_rd_slow(u32 a, int word) {
     a &= 0xffffff;
+    if (a < 0xa00000) return word ? 0xffff : 0xff;      /* past the cartridge */
     if (a < 0xa10000) {                                 /* Z80 space */
         m68k.cycles -= 1; md_waits++;                    /* MAME: a wait state on the Z80 bus */
         if (a >= 0xa04000 && a < 0xa06000)              /* YM2612 status: busy after a write */
             return (int)(md_ym_busy_end - md_now()) > 0 ? 0x80 : 0;
         if (a < 0xa02000 || (a >= 0xa02000 && a < 0xa04000)) {
             u32 o = a & 0x1fff;
+            mz_sync();
             if (word) return ((u32)md_zram[o & ~1u] << 8) | md_zram[o | 1];
             return md_zram[o];
         }
@@ -402,11 +422,13 @@ static __attribute__((noinline)) u32 md_rd_slow(u32 a, int word) {
 
 static __attribute__((noinline)) void md_wr_slow(u32 a, u32 v, int word) {
     a &= 0xffffff;
+    if (a < 0xa00000) return;                           /* the cartridge: no wait, no effect */
     if (a < 0xa10000) {                                 /* Z80 space */
         m68k.cycles -= 1; md_waits++;                   /* MAME: a wait state on the Z80 bus */
         if (md_zbusreq && !md_zreset) {
             if (a < 0xa04000) {
                 u32 o = a & 0x1fff;
+                mz_sync();
                 if (word) md_zram[o & ~1u] = (u8)(v >> 8);   /* MAME: a word write keeps only the MSB */
                 else md_zram[o] = (u8)v;
                 if (o == 0x1fff && !word) { md_z80_cmd = (u8)v; md_z80_cmd_new = 1; }
@@ -430,10 +452,12 @@ static __attribute__((noinline)) void md_wr_slow(u32 a, u32 v, int word) {
     }
     if ((a & 0xffff00) == 0xa11100) {                   /* Z80 bus request */
         md_zbusreq = (u8)((word || !(a & 1)) ? (v >> (word ? 8 : 0)) & 1 : v & 1);
+        mz_busreq(md_zbusreq);
         return;
     }
     if ((a & 0xffff00) == 0xa11200) {                   /* Z80 reset (0 = held in reset) */
         md_zreset = !((word || !(a & 1)) ? (v >> (word ? 8 : 0)) & 1 : v & 1);
+        mz_reset_w(md_zreset);
         return;
     }
     if ((a & 0xe00000) == 0xc00000 && (a & 0xe700e0) == 0xc00000) {   /* VDP */
@@ -477,7 +501,7 @@ static void md_find_idle(void) {
     u32 i;
     md_idle_pc = 0xffffffffu;
     for (i = 0; i + 3 < MD_ROM_WORDS; i++)
-        if (md_rom[i] == 0x4a38 && md_rom[i + 2] == 0x66fa) { md_idle_pc = i * 2; return; }
+        if (md_rom[i] == 0x4a38 && md_rom[i + 2] == 0x66fa) { md_idle_pc = i * 2; md_idle_var = md_rom[i + 1]; return; }
 }
 
 static void md_reset(void) {
@@ -489,21 +513,22 @@ static void md_reset(void) {
     for (i = 0; i < 0x2000; i++) md_zram[i] = 0;
     md_vaddr = 0; md_vcode = 0; md_cmd_pending = 0; md_fill_pending = 0;
     md_irq6_pending = md_irq4_pending = 0; md_irq4counter = -1; md_vblank = 0;
-    md_zbusreq = 0; md_zreset = 1;
+    md_zbusreq = 0; md_zreset = 1; mz_init();
     md_io_data[0] = md_io_data[1] = md_io_data[2] = 0x7f;
     md_io_ctrl[0] = md_io_ctrl[1] = md_io_ctrl[2] = 0;
     md_line = 0;
     md_find_idle();
     m68k_reset();
+    m68k.cycles -= 34;                  /* MAME's reset exception, before the first instruction */
 }
 
 /* One frame: 262 lines. At each line start the VDP's line events run as in MAME's
  * vdp_handle_scanline_callback (VINT at 224, the HINT counter on lines 0-224), then the
  * 68000 runs the line's cycles. */
-static u32 md_cyc_frac;                 /* master clocks not yet given to the 68000 */
+static u32 md_cyc_frac;                 /* the part cycle not yet given, in 1/MD_MCLK_HZ cycles */
 
 static inline void md_line_events(int line) {
-    if (line == MD_VIS_LINES) { md_irq6_pending = 1; md_vblank = 1; }
+    if (line == MD_VIS_LINES) md_vblank = 1;        /* VINT: md_frame raises it */
     if (line <= MD_VIS_LINES) {
         if (--md_irq4counter == -1) {
             md_irq4counter = md_reg[10];
@@ -513,13 +538,27 @@ static inline void md_line_events(int line) {
     md_update_irq();
 }
 
-/* run the 68000 for `cyc` cycles from the start of line `line0` */
-static void md_run(int cyc, int line0) {
+/* the recompiled code checks its cycles only at branches, so it can run past the point
+ * where MAME takes VINT: the cycles up to it run on the interpreter (md_interp) */
+#define MD_VINT_TAIL 200
+static u8 md_interp;
+
+/* run the 68000 for `cyc` cycles from `off` cycles into line `line0` */
+static void md_run(int cyc, int line0, int off) {
+    u32 t0 = md_clock_base;
     md_clock_base += (u32)cyc;
     if (md_idle && !m68k_irq_pending()) return;   /* spinning in WaitForVBla: skip ahead */
-    md_idle = 0;
     m68k.cycles += cyc;
-    md_seg_line = line0; md_seg_start = m68k.cycles;
+    if (md_idle) {
+        /* where the skipped loop (tst.b 12 cycles, bne.s 10) would be at t0: the
+         * interrupt waits for its next instruction boundary */
+        u32 o = (t0 - md_idle_t) % 22u;
+        if (o == 0) m68k.pc = md_idle_pc;
+        else if (o <= 12) { m68k.pc = md_idle_pc + 4; m68k.cycles -= (int)(12 - o); }
+        else { m68k.pc = md_idle_pc; m68k.cycles -= (int)(22 - o); }
+    }
+    md_idle = 0;
+    md_seg_line = line0; md_seg_start = m68k.cycles + off;
     for (;;) {
         if (m68k.cycles <= 0) {
             if (!md_cyc_owed) break;
@@ -528,7 +567,7 @@ static void md_run(int cyc, int line0) {
         if (m68k_irq_pending()) { MD_INTERRUPT(); md_idle = 0; }
         if (m68k.stopped) { m68k.cycles = 0; md_cyc_owed = 0; break; }
 #ifdef MD_RECOMP
-        if (!md_rc_run()) MD_STEP();
+        if (md_interp || !md_rc_run()) MD_STEP();
 #else
         MD_STEP();
 #endif
@@ -540,23 +579,34 @@ static void md_run(int cyc, int line0) {
  * got there, so it runs in two slices, lines 0-223 and 224-261, or a line at a time
  * while HINT is enabled (Labyrinth Zone's water line). */
 static __attribute__((noinline)) void md_frame(void) {
-    int line, pend = 0, seg = 0;
+    int line, pend = 0, seg = 0, off = 0;
     md_vblank = 0;
     md_frames++;
+    mz_frame();
     for (line = 0; line < MD_LINES; line++) {
-        int cyc = 488;                                /* 3420 / 7 = 488 4/7 */
+        int cyc = 488;                                /* 3420 x 7670453 / 53693175 */
         if (pend && (line == MD_VIS_LINES || (md_reg[0] & 0x10))) {
-            /* MAME raises VINT 32 VDP clocks (/4) into line 224: MD_VINT_DELAY 68000 cycles */
-            int d = line == MD_VIS_LINES ? MD_VINT_DELAY : 0;
-            md_run(pend + d, seg); pend = -d; seg = line;
+            if (line == MD_VIS_LINES && pend > MD_VINT_TAIL) {
+                md_run(pend - MD_VINT_TAIL, seg, off);
+                off += pend - MD_VINT_TAIL; pend = MD_VINT_TAIL;
+                md_interp = 1;
+            }
+            md_run(pend, seg, off); pend = 0; seg = line; off = 0;
         }
         md_line = line;
         md_line_events(line);
-        md_cyc_frac += MD_MCLK_LINE - 488 * 7;
-        if (md_cyc_frac >= 7) { md_cyc_frac -= 7; cyc++; }
+        if (line == MD_VIS_LINES) {                   /* VINT, MD_VINT_MCLK into the line */
+            off = (int)((md_cyc_frac + MD_VINT_MCLK * MD_CPU_HZ + MD_MCLK_HZ - 1) / MD_MCLK_HZ);
+            md_run(off, line, 0);
+            md_interp = 0;
+            md_irq6_pending = 1; md_update_irq();
+            pend = -off;
+        }
+        md_cyc_frac += (u32)(MD_MCLK_LINE * (unsigned long long)MD_CPU_HZ - 488ull * MD_MCLK_HZ);
+        if (md_cyc_frac >= MD_MCLK_HZ) { md_cyc_frac -= MD_MCLK_HZ; cyc++; }
         pend += cyc;
     }
-    md_run(pend, seg);
+    md_run(pend, seg, off);
 }
 
 #endif /* MD_HW_H */

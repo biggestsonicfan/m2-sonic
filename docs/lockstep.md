@@ -6,7 +6,7 @@ both on the same input script, and compares them frame by frame.
 
 ```sh
 MAME=~/build/mame-bin/mame-shared/shared CART=Sonic_The_Hedgehog.bin ROMS_M2=/path/to/stock/roms \
-GAME=build LS_FRAMES=6000 tools/mdlockstep/run.sh
+GAME=build LS_FRAMES=3000 tools/mdlockstep/run.sh
 ```
 
 ## Watching it
@@ -49,19 +49,18 @@ LS_FRAMES=1500 CART=... ROMS_M2=~/build/mameroms GAME=build tools/mdlockstep/liv
 - `LIVE_DBG=1`: log the bytes the port has queued for the sound board at each frame.
 - `python3 tools/mdlockstep/live_check.py $LIVE_DIR` reports on a finished run.
 
-Results, 1500 frames (title, then the start of Green Hill):
+Results, 3000 frames (title, Green Hill, measured 2026-10-03):
 
 | what | the same |
 |---|---|
-| everything (registers, RAM, VRAM, CRAM, VSRAM, VDP, chip writes) | 1473 of 1500 frames |
-| chip writes | 1500 of 1500 |
-| pictures | 401 of 405 |
-| notes | 907 of 951, none extra; FM 490/490, PSG2 and noise all; PSG1 170/204, drums 75/85 |
+| everything (registers, RAM, VRAM, CRAM, VSRAM, VDP, chip writes) | 3000 of 3000 frames |
+| chip writes | 3000 of 3000 |
+| pictures | 996 of 1003 |
+| notes | 2108 of 2251, none extra; FM all, PSG2 all, noise 225/226, PSG1 417/546, drums 152/165 |
 | when | median 1 frame late |
 
-- The 27 differing frames are the transients `compare.py` found (24, 476, 626-650).
-- Pictures 1462 and 1497 differ in the rightmost columns (x 313-319, a sprite at the
-  edge). 1337 differs in its bottom 5 rows. 472 is next to the 476 transient.
+- The 7 differing pictures (472, 1497, 1905, 1987, 2069, 2151, 2429) are not explained yet;
+  the state they are drawn from is identical.
 - PSG1's missing notes are fast sweeps (a step a frame). The UART carries about 50 bytes a
   frame, so two steps sometimes reach the SCSP in the same frame.
 - Drums: their samples stream over the same line for the first ~340 frames, and the port
@@ -98,50 +97,48 @@ so both read the same pad in the same frame.
   renderer, `src/md_render.h`) run on each side's own VDP state, since the Model 2 draws
   only some of the frames.
 
-## Results (6000 frames, attract mode and play)
+## Results (3000 frames, attract mode and play, measured 2026-10-03)
 
 | What | Identical |
 |---|---|
-| interrupts | 6000 VINTs on both (no HINTs in these scenes) |
-| 68000 registers at VINT | 5973 of 6000 frames |
-| work RAM | 5989 of 6000 |
-| VRAM | 5996 of 6000 |
-| CRAM, VSRAM, VDP registers | 6000 of 6000 |
-| YM2612 / PSG writes, Z80 commands | 6000 of 6000 frames, same writes in the same order (14065 / 7566 / 243) |
-| port pictures vs its VDP state | 121 of 121 |
-| MAME pictures vs its VDP state | 469 of 498 (the other 29 up to 3936 pixels; not explained yet) |
+| interrupts | 3000 VINTs on both (no HINTs in these scenes) |
+| 68000 registers at VINT | 3000 of 3000 frames |
+| work RAM, VRAM, CRAM, VSRAM, VDP registers | 3000 of 3000 |
+| YM2612 / PSG writes, Z80 commands | 3000 of 3000 frames, same writes in the same order (8501 / 4906 / 165) |
+| port pictures vs its VDP state | 86 of 86 |
+| MAME pictures vs its VDP state | 248 of 248 |
 
-The differences are transients, in busy frames (loading a zone, frames 24 and 646-650):
-the VINT lands a few instructions earlier or later than on MAME, so it catches a loop in a
-different iteration (registers, a few words of the object table at `ffa500` and the stack),
-and a DMA/copy is at a different point (VRAM `c600`-`ed00`). The next frames agree again.
-The host interpreter (`tools/mdhost.c`) does the same, so it is not the recompiler.
+### Cycle timing
 
-### Interrupt timing (3000 frames, measured 2026-10-02)
+Both sides record the 68000's time at each interrupt acknowledge: MAME's cycle count
+(`device.total_cycles`, from claude_mame's `md-lockstep` branch, in the shared build) in
+`ref_iack.bin`, the port's `md_now()` in `port_iack.bin`, both from power-on. The port is now
+2-7 cycles behind MAME (median 3) at every one of the 3000 acknowledges: what is left is
+MAME's E-clock wait (`vpa_sync` puts autovector acknowledges on a 10-cycle grid), which
+the port does not model.
 
-Both sides now record the 68000's time at each interrupt: MAME's cycle count at the
-acknowledge bus cycle (`device.total_cycles`, from claude_mame's `md-lockstep` branch, in the
-shared build) in `ref_iack.bin`, the port's `md_now()` as it takes the interrupt in
-`port_iack.bin`. Both count from power-on, so the times compare directly:
+Getting there took, in order (each found with per-instruction traces of both, in MAME
+with a Lua tap on the bus, in the port with `tools/mdhost.c -t`):
 
-- Frame lengths agree: MAME's acknowledges come 128000 / 128010 cycles apart (`vpa_sync`
-  puts every autovector acknowledge on the E clock's 10-cycle grid) and the port's 128005 /
-  128006; both average 128005.7 (262 x 3420 / 7).
-- MAME acknowledges 22-36 cycles after the port takes the VINT (median 25, within 10 of that
-  in 2164 of 3000 frames): the VDP raises VINT 18 cycles into line 224, then the 68000
-  finishes its instruction, starts the exception and waits for the E edge. The port takes it
-  exactly at line 224 (cycle 109440 of the frame) because it skips `WaitForVBla` idling.
-- The register differences are **not** this lead. With `MD_VINT_DELAY=18` and with
-  `MD_VINT_DELAY=18 MD_E_PHASE=0` the same 27 frames differ, in the same way. They are frame
-  24 (boot), 476 and 626-650 (a zone loading). In those frames the VINT interrupts
-  decompression code (`0x17ac`-`0x1928`, `0x6ae6`-`0x6c12`) with the port a loop iteration
-  or two ahead or behind, so per-instruction timing differs. The port's 68000 times
-  instructions like Musashi, while MAME's `genesis` uses MAME's newer 68000 core, which
-  times some instructions differently.
-  The state converges by frame 651 and nothing visible or audible differs.
+- **MAME's 68000 times, not Musashi's:** `tools/optiming` runs every opcode on both
+  (`docs/port.md`); `tools/m68k_cyc_mame.py` corrects the table.
+- **The clock:** MAME's 68000 runs at the integer 7670453 Hz, not MCLK/7, its reset
+  exception takes 34 cycles, and it takes VINT after the first instruction ending 149
+  master clocks into line 224.
+- **The idle skip and the recompiler** must not move the interrupt: the skip puts it where
+  the skipped loop would have been, and the last 200 cycles before VINT run on the
+  interpreter, which can stop on any instruction.
+- **The Z80's busy flag** (`src/md_z80.h`, `docs/port.md`): during a drum the sound driver
+  polls `$A01FFD`; once a poll comes out differently, the 68000 is ~140 cycles off, and in
+  a zone load (frames 636-650) that put the VINT into a different loop iteration of the
+  decompressor. The model follows MAME's scheduler, which completes a Z80 access that falls
+  past the 68000's time in the Z80's next timeslice (the next scanline timer); it was fitted
+  offline against MAME's own traces (817 of 817 bus requests and every `$1FFD`/`$1FFF`
+  write).
 
-So `MD_VINT_DELAY` / `MD_E_PHASE` / `MD_E_ADJ` stay off (0 / -1 / 0). Matching those frames
-would mean matching MAME's 68000 core cycle for cycle, which buys nothing on screen.
+`hostrec.c` stamps chip writes with the frame at the end of `md_frame()`, so writes made
+between that and the VINT land a frame late in its report (2415 of 3000 frames the same,
+all of them shifted, not different); the live check and `run.sh` stamp them as they are made.
 
 Fixes this found (now in the port): the YM2612 busy flag (192 cycles, ymfm) and the Z80-bus
 wait state, which had put the whole game one frame behind from boot; MAME's sprite masking

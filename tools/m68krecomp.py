@@ -308,6 +308,8 @@ class Insn:
         if mode == 0:
             b = self.var('1u << (%s & 31)' % bit)
             self.fl('z', 'm68k.d[%d] & %s' % (reg, b))
+            if t and bit.startswith('0x'): self.cyc += 2 if int(bit.rstrip('u'), 16) & 16 else 0
+            elif t: self.emit('if (%s & 16) m68k.cycles -= 2;' % bit)   # bit 16-31: 2 more
             if t == 1: self.emit('m68k.d[%d] ^= %s;' % (reg, b))
             elif t == 2: self.emit('m68k.d[%d] &= ~%s;' % (reg, b))
             elif t == 3: self.emit('m68k.d[%d] |= %s;' % (reg, b))
@@ -550,7 +552,7 @@ class Insn:
         s = self.ea_read(mode, reg, 2)
         if op & 0x100:
             r = self.var('(u32)((s32)(s16)%s * (s32)(s16)m68k.d[%d])' % (s, rx))
-            self.emit('m68k.cycles -= rc_muls_cyc(%s);' % s)
+            self.emit('m68k.cycles -= m68k_muls_cyc(%s);' % s)
         else:
             r = self.var('%s * (m68k.d[%d] & 0xffffu)' % (s, rx))
             self.emit('m68k.cycles -= rc_mulu_cyc(%s);' % s)
@@ -563,6 +565,7 @@ class Insn:
         # the EA side effects, so only register/immediate/plain-memory sources here)
         if mode in (3, 4): raise Untranslated('div postinc/predec')
         self.emit('if (!%s) { m68k.pc = %s; RC_EXIT_FB }' % (s, hx(self.pc)))
+        self.emit('m68k.cycles -= m68k_div%s_cyc(m68k.d[%d], %s);' % ('s' if op & 0x100 else 'u', rx, s))
         self.writes.add('v')          # on overflow only V is written: the rest may stay
         if op & 0x100:
             self.emit('{ s32 s_ = (s16)%s, q_, r_;' % s)
@@ -732,11 +735,6 @@ static __attribute__((noinline)) u32 rc_shift(int sz, int type, int left, u32 v,
     return m68k_shift(sz, type, left, v, cnt);
 }
 static __attribute__((noinline)) int rc_mulu_cyc(u32 s) { int c = 0; for (; s; s >>= 1) if (s & 1) c += 2; return c; }
-static __attribute__((noinline)) int rc_muls_cyc(u32 s) {
-    u32 y = (u32)(s32)(s16)s, f = 0; int c = 0;
-    for (; y; y >>= 1) if ((y & 1) != f) { c += 2; f = 1 - f; }
-    return c;
-}
 """
 
 # ------------------------------------------------------------------------------ the program
@@ -921,8 +919,8 @@ def main():
         elif k == 'bcc':
             taken_cyc = cyc_now
             nt = cyc_now + (-2 if ins.short else 2)       # not taken: Bcc.S 2 less, Bcc.W 2 more
-            idle = ' md_idle = 1; m68k.cycles = 0; m68k.pc = %s; return 1;' % hx(ins.target) if ins.target == idle_pc else ''
-            tk = ('m68k.cycles -= %d;%s' % (taken_cyc, idle)) if idle else goto(ins.target, 'm68k.cycles -= %d;' % taken_cyc)
+            idle = ' md_idle_t = md_clock_base - (u32)m68k.cycles; md_idle = 1; m68k.cycles = 0; m68k.pc = %s; return 1;' % hx(ins.target) if ins.target == idle_pc else ''
+            tk = ('m68k.cycles -= %d; if (md_idle_wait()) {%s } %s' % (taken_cyc, idle, goto(ins.target, ''))) if idle else goto(ins.target, 'm68k.cycles -= %d;' % taken_cyc)
             if falls and not a.exact:
                 w(line + ' if (%s) { %s } }' % (ins.cond, tk))
                 acc = nt
