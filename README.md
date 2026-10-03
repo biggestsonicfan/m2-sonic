@@ -69,9 +69,9 @@ per second, and the i960's time per Mega Drive frame and per picture, in thousan
 
 - Runs in MAME (native and web) at 99-100% game speed, 20-50 pictures a second (12-25 in
   busy scenes such as Marble Zone's lava and the Special Stage).
-- Checked against MAME's own Mega Drive over 6000 frames ([docs/lockstep.md](docs/lockstep.md)):
-  CRAM, VSRAM, VDP registers and every sound-chip write identical in all of them; RAM and
-  VRAM in all but a handful of frames (interrupt timing in busy frames); every picture the
-  port drew pixel for pixel what its VDP state says.
+- Checked against MAME's own Mega Drive over 3000 frames ([docs/lockstep.md](docs/lockstep.md)):
+  the 68000 runs cycle for cycle with MAME's (every VINT within 2-7 cycles), so registers,
+  RAM, VRAM, CRAM, VSRAM, VDP registers and every sound-chip write are identical in all of
+  them; every picture the port drew is pixel for pixel what its VDP state says.
 - Not done: Labyrinth Zone's water colours (per-line palette), the SEGA voice at boot.
 - Not yet tried on real hardware or in m2emulator.

@@ -7,7 +7,8 @@
  *   git clone https://github.com/kstenerud/Musashi && make -C Musashi
  *   cc -IMusashi -o m68k_cyc tools/m68k_cyc.c Musashi/m68kcpu.o Musashi/m68kops.o \
  *      Musashi/m68kdasm.o Musashi/softfloat/softfloat.o -lm
- *   ./m68k_cyc > src/m2_m68k_cyc.h
+ *   ./m68k_cyc > musashi.h
+ *   python3 tools/m68k_cyc_mame.py musashi.h > src/m2_m68k_cyc.h    (MAME's timings)
  */
 #include <stdio.h>
 #include <string.h>

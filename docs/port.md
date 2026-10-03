@@ -2,19 +2,37 @@
 
 ## How it works
 
-- **68000:** `src/m2_m68k.h`, an interpreter with Musashi's flags and cycle counts
-  (`src/m2_m68k_cyc.h`: Musashi's per-opcode table, 5.5 KB). Checked against Musashi one
-  instruction at a time (`tools/mdlock`, below). The hot code is statically recompiled
+- **68000:** `src/m2_m68k.h`, an interpreter with Musashi's flags and MAME's cycle counts
+  (`src/m2_m68k_cyc.h`: Musashi's per-opcode table, 5.5 KB, corrected to MAME's microcoded
+  68000 by `tools/m68k_cyc_mame.py`; MUL/DIV and the bit ops' data-dependent times as MAME
+  has them). Checked against Musashi one instruction at a time (`tools/mdlock`, below), and
+  timed opcode by opcode against MAME (`tools/optiming`). The hot code is statically recompiled
   (`tools/m68krecomp.py`, the pattern of Pac-Man's `z80recomp.py`): the 4200 most run
   instructions (97.8% of what runs) become C with constant operands, flags computed only
   where read, gotos between blocks and a hash for returns and indirect jumps; everything
   else runs on the interpreter. An idle skip ends the frame in the game's WaitForVBla loop.
 - **Board:** `src/md_hw.h`: memory map, the VDP's ports, DMA, VINT/HINT, 3-button pads, as
-  MAME's `megadriv.cpp` and `315_5313.cpp`. The Z80 is not run (the 68000 gets its bus at
-  once); YM2612 and PSG writes are queued for the sound code. The YM2612 reads busy for 192
-  cycles after a write (ymfm), and each 68000 access to the Z80 bus costs a wait state, as
-  in MAME: Sonic's sound driver waits on that flag, so without it the port ran ahead of
-  MAME at boot (found by the lockstep, [lockstep.md](lockstep.md)).
+  MAME's `megadriv.cpp` and `315_5313.cpp`. YM2612 and PSG writes are queued for the sound
+  code. The YM2612 reads busy for 192 cycles after a write (ymfm), and each 68000 access to
+  the Z80 bus costs a wait state, as in MAME: Sonic's sound driver waits on that flag, so
+  without it the port ran ahead of MAME at boot (found by the lockstep, [lockstep.md](lockstep.md)).
+- **Timing, cycle for cycle with MAME's `genesis`:** the 68000 at MAME's integer clock
+  (7670453 Hz, so a line is 488.57 cycles and the frame drifts against MCLK/7 as MAME's
+  does); 34 cycles of reset exception before the first instruction; VINT taken after the
+  first instruction that ends 149 master clocks or more into line 224 (MAME's traces put it
+  between 148.05 and 149.6). The recompiled code checks its cycles only at branches, so the
+  last 200 cycles before VINT run on the interpreter (`MD_VINT_TAIL`), and the idle skip
+  puts the interrupt where the skipped `tst.b`/`bne.s` loop would have been. A 68000 -> VRAM
+  DMA stops the 68000 as MAME's does.
+- **Z80:** not emulated, but its timing is: `src/md_z80.h` models the game's DAC driver
+  (Z80 RAM 0-0xff) instruction by instruction, in MAME's attoseconds, only for what the 68000
+  can see: the busy flag at `$A01FFD` and the command byte at `$A01FFF`. It follows MAME's
+  scheduler: the Z80 runs up to the 68000's bus cycle on its own clock edges, an access
+  falling past the edge completes in its next timeslice (the next scanline timer or bus
+  request), and it stops while the 68000 holds the bus. Sonic's sound driver polls `$A01FFD`
+  before writing the YM2612 while a drum plays, so this decides how long it waits (frames
+  636-650 differed without it). Whole poll and sample loops are skipped in one step: with
+  it the port still draws as many pictures (1003 in 3000 frames; 985 before).
 - **Video:** `src/md_s24.h` puts the picture on the Model 2's System 24 tilemaps: plane B and
   plane A on the two scrolling layers (the hardware does the per-line scroll), each
   (pattern, flip, palette line) as its own char (the char number fixes the palette), the
@@ -40,15 +58,17 @@
 
 | What | How | Result |
 |---|---|---|
-| 68000 core | `tools/mdlock`: every instruction (and interrupt) run again on Musashi, its bus replaying the core's accesses | 199M instructions (30000 frames of the attract mode) and 3000-frame plays of 3 zones: registers, SR, both SPs, cycles and every write identical |
+| 68000 core | `tools/mdlock`: every instruction (and interrupt) run again on Musashi, its bus replaying the core's accesses | 199M instructions (30000 frames of the attract mode) and 3000-frame plays of 3 zones: registers, SR, both SPs and every write identical (cycles too, before they were moved to MAME's: `-c`) |
+| 68000 timing | `tools/optiming/run.sh`: a test cartridge runs every legal opcode with each addressing mode on the port's core and on MAME's Mega Drive; per-instruction times compared | all equal except 73 `-(An)` cases, where an earlier illegal opcode MAME traps left different data; MUL/DIV: 1920 operand pairs equal |
 | whole machine | `tools/mdlockstep`: against MAME's own Mega Drive, frame by frame | [lockstep.md](lockstep.md) |
 | recompiled code | `m68krecomp.py --exact` vs the interpreter, RAM per frame (`mdhost -m`) | identical, 7 zones x 2500 frames |
 | System 24 video | `tools/mds24.c`: the tile/char/palette RAM drawn as MAME's `model2_v.cpp` + `segaic24.cpp` compose it, against a reference renderer (`src/md_render.h`) | 0 pixels differ in 596 of 600 sampled frames (20 zones); 14 pixels in the other 4 (sprite priority, below) |
 | sound | ymfm (MAME's YM2612) rendering the same register writes vs MAME's recording of the Model 2 | the pitches agree (e.g. 98/100, 247/246, 488/492 Hz) |
 | MAME | native and web (Pinboard) Model 2 builds | attract mode and play at 99-100% game speed, 20-50 pictures/s |
 
-`tools/mdhost.c` runs the whole thing on a PC (pictures, RAM, profiles); `tools/m68k_cyc.c`
-makes the cycle table from Musashi; `tools/mds24.c` (`-I../m2-sdk/src`) checks the tilemap
+`tools/mdhost.c` runs the whole thing on a PC (pictures, RAM, profiles; `-t` a per-instruction
+time trace); `tools/m68k_cyc.c` makes the cycle table from Musashi and
+`tools/m68k_cyc_mame.py` corrects it to MAME's; `tools/mds24.c` (`-I../m2-sdk/src`) checks the tilemap
 output against the reference renderer.
 
 ## Not done / known differences
@@ -60,5 +80,7 @@ output against the reference renderer.
 - Sound: FM detune, LFO, SSG-EG and envelope curves are approximate; the SEGA voice at boot
   (the 68000 drives the DAC itself) is silent; the timpani uploads last (~20 s after boot).
 - Busy scenes (Marble Zone's lava, the Special Stage) draw 12-25 pictures a second.
+- The program ROM has about 1.5 KB left (the recompiled code fills it); `md_z80.h` is
+  compiled `-Os` for that reason.
 - Runs in MAME only so far: not tried on real hardware or m2emulator (the sound relay's
   caveats are Pac-Man's: m2-pacman `docs/sound.md`).

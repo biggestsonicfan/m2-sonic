@@ -4,13 +4,14 @@
  *
  * Every instruction (and every interrupt the core takes) runs twice: first on the core,
  * whose bus accesses are logged, then on Musashi from the same registers, with its memory
- * callbacks replaying the log (mus_glue.c). The registers, SR, both stack pointers, the
- * cycles charged and every write must match; the first difference stops the run.
+ * callbacks replaying the log (mus_glue.c). The registers, SR, both stack pointers and
+ * every write must match; the first difference stops the run. The cycles follow MAME's
+ * 68000 now, not Musashi (tools/m68k_cyc_mame.py, tools/optiming): -c compares them too.
  *
  *   git clone https://github.com/kstenerud/Musashi /tmp/Musashi && make -C /tmp/Musashi
  *   M=/tmp/Musashi; cc -O2 -Isrc -I$M -o mdlock tools/mdlock/mdlock.c tools/mdlock/mus_glue.c \
  *       $M/m68kcpu.o $M/m68kops.o $M/m68kdasm.o $M/softfloat/softfloat.o -lm
- *   ./mdlock [-f frames] [-i frame:pad]...          (same inputs as tools/mdhost.c)
+ *   ./mdlock [-c] [-f frames] [-i frame:pad]...        (same inputs as tools/mdhost.c)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,12 +68,13 @@ static void dump(const char *what, const lk_regs_t *r) {
     printf("           a:"); for (i = 0; i < 8; i++) printf(" %08x", r->a[i]); printf("\n");
 }
 
+static int lk_cyc;                     /* -c: the cycles must match Musashi's too */
 static void check(const char *kind, const lk_regs_t *pre, int core_cyc, int mus_cyc) {
     lk_regs_t c, m;
     int i, bad = lk_bad;
     core_regs(&c); mus_get(&m);
     if (memcmp(&c, &m, sizeof c)) bad = 1;
-    if (core_cyc != mus_cyc) bad = 1;
+    if (lk_cyc && core_cyc != mus_cyc) bad = 1;
     for (i = 0; i < lk_n; i++)
         if (!lk_log[i].used && lk_log[i].w) {
             bad = 1;
@@ -124,6 +126,7 @@ int main(int argc, char **argv) {
     u8 inv[256];
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-f") && i + 1 < argc) frames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-c")) lk_cyc = 1;
         else if (!strcmp(argv[i], "-i") && i + 1 < argc) {
             char *c = strchr(argv[++i], ':');
             if (!c || ni >= 256) return 2;

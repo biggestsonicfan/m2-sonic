@@ -59,6 +59,10 @@ typedef signed char    m68k_s8;
 #ifndef M68K_BCC_TAKEN
 #define M68K_BCC_TAKEN(target) ((void)0)
 #endif
+/* M68K_TAS_WR8(a, v): TAS's write cycle (the Mega Drive's bus drops it) */
+#ifndef M68K_TAS_WR8
+#define M68K_TAS_WR8(a, v) M68K_WR8(a, v)
+#endif
 #ifndef M68K_RESET_HOOK
 #define M68K_RESET_HOOK() ((void)0)
 #endif
@@ -229,7 +233,7 @@ M68K_INL int m68k_cond(int cc) {
 }
 
 /* ---- exceptions ------------------------------------------------------------------------ */
-static const m68k_u8 m68k_exc_cyc[16] = { 40, 4, 50, 50, 34, 38, 40, 34, 34, 34, 34, 34, 4, 4, 4, 44 };
+static const m68k_u8 m68k_exc_cyc[16] = { 40, 4, 50, 50, 34, 38, 28, 34, 34, 34, 34, 34, 4, 4, 4, 44 };
 
 static __attribute__((noinline)) void m68k_exception(m68k_u32 vec) {
     m68k_u32 sr = m68k_get_sr();
@@ -424,11 +428,43 @@ static __attribute__((noinline)) void m68k_movep(m68k_u32 op) {
     }
 }
 
-/* DIVU / DIVS <ea>,Dn (Musashi: overflow sets V only; divide by zero traps) */
+/* DIVU / DIVS cycles without the EA (src != 0): MAME's m68000, which steps the 68000's
+ * microcode; the same counts as Jorge Cwik's model of the real chip */
+static __attribute__((noinline)) int m68k_divu_cyc(m68k_u32 dd, m68k_u32 ds) {
+    m68k_u32 h = ds << 16, t;
+    int c = 76, i;
+    if ((dd >> 16) >= ds) return 10;                            /* overflow */
+    for (i = 0; i < 15; i++) {
+        t = dd; dd <<= 1;
+        if (t >> 31) dd -= h;
+        else { c += 4; if (dd >= h) { dd -= h; c -= 2; } }
+    }
+    return c;
+}
+static __attribute__((noinline)) int m68k_divs_cyc(m68k_u32 dd, m68k_u32 ds) {
+    m68k_s32 s = (m68k_s16)ds;
+    m68k_u32 ad = (m68k_s32)dd < 0 ? 0u - dd : dd, as = s < 0 ? (m68k_u32)-s : (m68k_u32)s, q;
+    int c = (m68k_s32)dd < 0 ? 14 : 12, i;
+    if ((ad >> 16) >= as) return c + 4;                         /* overflow */
+    c += s >= 0 ? ((m68k_s32)dd < 0 ? 112 : 108) : 110;
+    for (q = ad / as, i = 0; i < 15; i++, q <<= 1) if (!(q & 0x8000)) c += 2;
+    return c;
+}
+/* MULS: 38 + 2 per 01 or 10 pair in the 17 bits source:0 */
+static __attribute__((noinline)) int m68k_muls_cyc(m68k_u32 src) {
+    m68k_u32 v = (src & 0xffff) << 1, x = (v ^ (v >> 1)) & 0xffff;
+    int c = 0;
+    for (; x; x &= x - 1) c += 2;
+    return c;
+}
+
+/* DIVU / DIVS <ea>,Dn (Musashi: overflow sets V only; divide by zero traps). The table
+ * holds the EA's cycles only */
 static __attribute__((noinline)) void m68k_div(m68k_u32 op) {
     int dn = (op >> 9) & 7, sgn = op & 0x100;
     m68k_u32 src = m68k_rd_ea((op >> 3) & 7, op & 7, 2);
     if (src == 0) { m68k_exception(5); return; }
+    m68k.cycles -= sgn ? m68k_divs_cyc(m68k.d[dn], src) : m68k_divu_cyc(m68k.d[dn], src);
     if (!sgn) {
         m68k_u32 q = m68k.d[dn] / src, r = m68k.d[dn] % src;
         if (q < 0x10000) {
@@ -453,8 +489,7 @@ static __attribute__((noinline)) void m68k_mul(m68k_u32 op) {
     int dn = (op >> 9) & 7;
     m68k_u32 src = m68k_rd_ea((op >> 3) & 7, op & 7, 2), r, y, c = 0;
     if (op & 0x100) {
-        m68k_u32 x = (m68k_u32)(m68k_s32)(m68k_s16)src, f = 0;
-        for (y = x; y; y >>= 1) if ((y & 1) != f) { c += 2; f = 1 - f; }
+        c = (m68k_u32)m68k_muls_cyc(src);
         r = (m68k_u32)((m68k_s32)(m68k_s16)src * (m68k_s32)(m68k_s16)m68k.d[dn]);
     } else {
         for (y = src; y; y >>= 1) if (y & 1) c += 2;
@@ -467,6 +502,7 @@ static __attribute__((noinline)) void m68k_mul(m68k_u32 op) {
 
 static __attribute__((noinline)) void m68k_illegal(m68k_u32 op) {
     m68k.pc = m68k.ppc;                /* the frame holds the illegal opcode's address */
+    if ((op >> 12) != 0xa && (op >> 12) != 0xf) m68k.cycles += M68K_CYC(op);   /* 34 in all */
     m68k_exception((op >> 12) == 0xa ? 10 : (op >> 12) == 0xf ? 11 : 4);
 }
 static __attribute__((noinline)) void m68k_privilege(void) {
@@ -496,6 +532,7 @@ static void m68k_step(void) {
             if (mode == 0) {
                 m68k_u32 bit = 1u << (s & 31);
                 m68k.z = m68k.d[reg] & bit;
+                if ((op & 0xc0) && (s & 16)) m68k.cycles -= 2;  /* BCHG/BCLR/BSET: bit 16-31 */
                 switch ((op >> 6) & 3) {
                 case 1: m68k.d[reg] ^= bit; break;
                 case 2: m68k.d[reg] &= ~bit; break;
@@ -563,11 +600,12 @@ static void m68k_step(void) {
     case 0x4:
         if (op & 0x100) {
             if ((op & 0x1c0) == 0x1c0) { m68k.a[rx] = m68k_ea(mode, reg, 4); break; }     /* LEA */
-            if ((op & 0x1c0) == 0x180) {                                                  /* CHK.W */
+            if ((op & 0x1c0) == 0x180 && mode != 1 && (mode != 7 || reg < 5)) {          /* CHK.W */
                 m68k_s32 bound = (m68k_s16)m68k_rd_ea(mode, reg, 2), v = (m68k_s16)m68k.d[rx];
                 m68k.z = v & 0xffff; m68k.v = 0; m68k.c = 0;
                 if (v >= 0 && v <= bound) break;
                 m68k.n = v < 0 ? 0x80000000u : 0;
+                if (v < 0 && mode != 6) m68k.cycles -= 2;      /* MAME: below 0 costs 2 more */
                 m68k_exception(6);
                 break;
             }
@@ -630,7 +668,7 @@ static void m68k_step(void) {
             if (((op >> 6) & 3) == 3) {
                 if (op == 0x4afc) { m68k_illegal(op); break; }                     /* ILLEGAL */
                 if (mode == 0) { d = m68k.d[reg] & 0xff; m68k_logic(1, d); m68k_setd(reg, 1, d | 0x80); }
-                else { ea = m68k_ea(mode, reg, 1); d = M68K_RD8(ea); m68k_logic(1, d); M68K_WR8(ea, (m68k_u8)(d | 0x80)); }
+                else { ea = m68k_ea(mode, reg, 1); d = M68K_RD8(ea); m68k_logic(1, d); M68K_TAS_WR8(ea, (m68k_u8)(d | 0x80)); }
                 break;                                                             /* TAS */
             }
             sz = 1 << ((op >> 6) & 3);                                             /* TST */
