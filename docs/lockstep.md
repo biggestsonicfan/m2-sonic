@@ -9,6 +9,75 @@ MAME=~/build/mame-bin/mame-shared/shared CART=Sonic_The_Hedgehog.bin ROMS_M2=/pa
 GAME=build LS_FRAMES=6000 tools/mdlockstep/run.sh
 ```
 
+## Watching it
+
+`tools/mdlockstep/live.sh` (same variables, `DISPLAY` set, no `LS_FRAMES`) opens the two
+side by side instead of recording: MAME's `genesis` with the cartridge on the left, the
+port under `sfight` on the right, both playing `inputs.lua`. `live.lua` keeps them on the
+same frame: at each VINT a side writes its count to `$LIVE_DIR/<side>.cnt` and the one
+ahead waits for the other. Each screen shows its frame number. The pair runs at about 52
+frames a second. The port shows ~18 pictures a second, so its picture can be a frame or
+two behind its own frame number. Close either window and the other runs on alone after
+10 seconds.
+
+## Checking it live
+
+While the two run, `live.lua` hashes both sides at every VINT and `live_check.py` compares
+them. Its verdict shows on both screens under the frame number (green: the same; red:
+`DIFF`), and each difference goes to `$LIVE_DIR/check.log`. Hashes are FNV-1a 64, folded
+to 32 bits. Each side writes `$LIVE_DIR/<side>.rec`:
+
+- **State per frame:** the 68000's registers, normalised as in `compare.py`. Work RAM in
+  16 blocks of 4 KB, plus the live stack. VRAM in 16 blocks. CRAM, VSRAM and the VDP
+  registers. The frame's YM2612/PSG writes and Z80 commands.
+- **The picture:** at MAME's levels mapped to the Mega Drive's 3 bits a channel, so the
+  two palettes compare. The port draws only some frames; each one it draws is checked
+  against MAME's picture of the same frame.
+- **The sound:** the reference's chip writes, the SCSP register writes the Model 2's
+  sound board makes, and each side's loudness per frame. `live_check.py` turns both into
+  notes per voice (FM1-6, PSG1-3, noise, drums), each a pitch in cents. A note matches
+  when the Model 2 plays it within 2 frames early to 45 late, ±50 cents.
+
+```sh
+# 1500 frames, no windows, as fast as they go (~70 frames a second), then the report
+LS_FRAMES=1500 CART=... ROMS_M2=~/build/mameroms GAME=build tools/mdlockstep/live.sh
+```
+
+- `LS_FRAMES`: no windows; stop at that frame and print the report (also `report.txt`).
+- `LIVE_CHECK=0`: only the lockstep, without the hashes.
+- `LIVE_PICS=a-b`: save both pictures of frames a-b as `<side>_NNNNN.rgb` (320x224 RGB).
+- `LIVE_DBG=1`: log the bytes the port has queued for the sound board at each frame.
+- `python3 tools/mdlockstep/live_check.py $LIVE_DIR` reports on a finished run.
+
+Results, 1500 frames (title, then the start of Green Hill):
+
+| what | the same |
+|---|---|
+| everything (registers, RAM, VRAM, CRAM, VSRAM, VDP, chip writes) | 1473 of 1500 frames |
+| chip writes | 1500 of 1500 |
+| pictures | 401 of 405 |
+| notes | 907 of 951, none extra; FM 490/490, PSG2 and noise all; PSG1 170/204, drums 75/85 |
+| when | median 1 frame late |
+
+- The 27 differing frames are the transients `compare.py` found (24, 476, 626-650).
+- Pictures 1462 and 1497 differ in the rightmost columns (x 313-319, a sprite at the
+  edge). 1337 differs in its bottom 5 rows. 472 is next to the 476 transient.
+- PSG1's missing notes are fast sweeps (a step a frame). The UART carries about 50 bytes a
+  frame, so two steps sometimes reach the SCSP in the same frame.
+- Drums: their samples stream over the same line for the first ~340 frames, and the port
+  skips a drum not uploaded yet. The matcher then pairs a skipped drum with the next one,
+  which is where the 12-16 frame "late" group in the report comes from.
+
+The check found two bugs in the port's sound, now fixed:
+
+- The relay queue's head could pass its tail, and the UART then sent the whole 4 KB ring
+  again. It replayed old key-ons, and key-offs were lost behind it. Cause: the SDK's
+  `m2_irq_off()` has no `"memory"` clobber, so GCC read the head before masking
+  (`src/m2_scsp.h`).
+- A new instrument's wave (64 writes) used to go out in one burst, delaying the key-ons
+  behind it by up to 9 frames. It now goes out a few words a frame, and the key-on plays
+  the sine until it is in. PSG tones are now sent once a frame, not half-written.
+
 ## What is recorded
 
 Frames are counted by VINTs taken, on both sides; the pad (`inputs.lua`: title, START, then
@@ -85,3 +154,4 @@ The port re-voices the chips on the SCSP, so its audio cannot match sample for s
 `compare.py` lines the two recordings up (the port trails by 1.5 s: the sound board boots)
 and compares loudness (correlation 0.61) and the spectrum per second (median similarity
 0.42). The register writes above are the real check; `docs/port.md` has the pitch check.
+The live check (above) matches the notes, frame by frame.

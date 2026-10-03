@@ -51,12 +51,16 @@ static u8  snd_ym[2][256];               /* YM2612 registers, per port */
 static u8  snd_key[6];                   /* channel keyed on (any operator) */
 static u16 snd_psg_tone[3], snd_psg_noise;
 static u8  snd_psg_att[4] = { 15, 15, 15, 15 }, snd_psg_latch;
+static u8  snd_psg_dirty;                /* PSG voices changed this frame (bits 0-3) */
 static u16 snd_sent[16][16];             /* SCSP slot registers last sent (0x00-0x1E / 2) */
 static u8  snd_sent_ok[16][16];
 static snd_s16 snd_sin[256];                 /* one period, amplitude 16384 */
 static u32 snd_wkey[SND_NWAVES];         /* what each cached wavetable was rendered from */
 static u8  snd_wready[SND_NWAVES];
 static u32 snd_wnext;
+static int snd_wup = -1;                 /* the wavetable being uploaded, -1 none */
+static u32 snd_wup_at;                   /* bytes of it sent */
+static snd_s8 snd_wbuf[128];             /* its samples */
 static u32 snd_dropped;                  /* statistics: updates that had to wait */
 static u32 snd_dac_at[SND_DAC_N], snd_dac_len[SND_DAC_N];   /* where each drum went, samples */
 static u32 snd_dac_up;                   /* samples of all drums uploaded so far */
@@ -178,20 +182,30 @@ static void snd_render(int ch, snd_s8 *out) {
     for (i = 0; i < 128; i++) out[i] = (snd_s8)(acc[i] * 120 / peak);
 }
 
-/* the cached wavetable for the channel's instrument, rendered and queued if new;
- * -1 = not uploaded yet (the line is busy) */
+/* the cached wavetable for the channel's instrument; -1 = not in sound RAM yet (the key-on
+ * plays the sine). A new one is rendered here and sent a little at a time by
+ * snd_wave_feed: at the line's ~50 bytes a frame, sent whole (64 writes, ~450 bytes) it
+ * held up every key-on and key-off behind it by up to nine frames each. */
 static int snd_wave(int ch) {
     u32 key = snd_patch_key(ch), i;
-    snd_s8 w[128];
     for (i = 0; i < SND_NWAVES; i++) if (snd_wkey[i] == key) return snd_wready[i] ? (int)i : -1;
-    if (!snd_room(64 * 7 + 64)) return -1;
+    if (snd_wup >= 0) return -1;                         /* one at a time: the next key-on asks again */
     i = snd_wnext; snd_wnext = (snd_wnext + 1) % SND_NWAVES;
-    snd_wkey[i] = key;
-    snd_render(ch, w);
-    { u32 j; for (j = 0; j < 128; j += 2)
-        m2_scsp_ram_w(SND_WAVES + i * 128 + j, (u16)(((u8)w[j] << 8) | (u8)w[j + 1])); }
-    snd_wready[i] = 1;      /* queued ahead of any key-on that uses it: in order on the line */
-    return (int)i;
+    snd_wkey[i] = key; snd_wready[i] = 0;
+    snd_render(ch, snd_wbuf);
+    snd_wup = (int)i; snd_wup_at = 0;
+    return -1;
+}
+
+/* send a few words of the wavetable being uploaded, while the line is nearly idle */
+static void snd_wave_feed(void) {
+    u32 words = 0, j;
+    while (snd_wup >= 0 && m2_scsp_pending() < 32 && words < 4) {
+        j = snd_wup_at;
+        m2_scsp_ram_w(SND_WAVES + (u32)snd_wup * 128 + j, (u16)(((u8)snd_wbuf[j] << 8) | (u8)snd_wbuf[j + 1]));
+        snd_wup_at = j + 2; words++;
+        if (snd_wup_at >= 128) { snd_wready[snd_wup] = 1; snd_wup = -1; }
+    }
 }
 
 /* YM2612 fnum/block -> SCSP pitch for a 64-samples-a-period wave:
@@ -280,20 +294,23 @@ static void snd_ym_w(u32 port, u32 reg, u32 v) {
     }
 }
 
+/* sent once a frame (snd_update): a tone is two writes, the latch's low bits then the
+ * data byte's high ones, and the half-written pitch between them is not one to play */
 static void snd_psg_w(u32 v) {
     u32 c;
     if (v & 0x80) {
         snd_psg_latch = (u8)v;
         c = (v >> 5) & 3;
-        if (v & 0x10) { snd_psg_att[c] = (u8)(v & 15); snd_psg_update((int)c); }
-        else if (c < 3) { snd_psg_tone[c] = (u16)((snd_psg_tone[c] & 0x3f0) | (v & 15)); snd_psg_update((int)c); }
-        else snd_psg_noise = (u16)(v & 7);
+        if (v & 0x10) snd_psg_att[c] = (u8)(v & 15);
+        else if (c < 3) snd_psg_tone[c] = (u16)((snd_psg_tone[c] & 0x3f0) | (v & 15));
+        else { snd_psg_noise = (u16)(v & 7); return; }
+        snd_psg_dirty |= (u8)(1u << c);
         return;
     }
     c = (snd_psg_latch >> 5) & 3;
     if (!(snd_psg_latch & 0x10) && c < 3) {
         snd_psg_tone[c] = (u16)((snd_psg_tone[c] & 15) | ((v & 0x3f) << 4));
-        snd_psg_update((int)c);
+        snd_psg_dirty |= (u8)(1u << c);
     }
 }
 
@@ -406,7 +423,12 @@ static void snd_update(void) {
         if ((e >> 24) == 1) snd_ym_w((e >> 16) & 1, (e >> 8) & 0xff, e & 0xff);
         else snd_psg_w(e & 0xff);
     }
-    if (snd_ok) snd_dac_feed();
+    if (snd_ok) {
+        u32 c;
+        for (c = 0; c < 4; c++) if (snd_psg_dirty & (1u << c)) snd_psg_update((int)c);
+        snd_psg_dirty = 0;
+        snd_wave_feed(); snd_dac_feed();
+    }
 }
 
 #endif /* MD_SND_H */
