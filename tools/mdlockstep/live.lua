@@ -17,10 +17,14 @@
 --   P k hash      the picture of frame k: the one the VDP state at VINT k draws (the frame
 --                 shown as that VINT comes), 320x224, colours as Mega Drive levels (the
 --                 port: only the frames it draws)
+--   S k hash b    port: every screen MAME drew, as the frame k it should show (the last
+--                 picture the port finished); b = 1: drawn while the next one was being built,
+--                 2: while it was going on screen (s24_swap: torn)
 --   Y k kind port reg val   ref: each YM2612 (1) / PSG (2) write, Z80 command (3)
 --   W k slot reg val        port: each SCSP slot register write the sound board makes
 -- LIVE_DBG=1: also D k n, the bytes the port has queued for the sound board at VINT k.
--- LIVE_PICS=a-b: also save the pictures of frames a-b as <side>_NNNNN.rgb (320x224 RGB).
+-- LIVE_PICS=a-b: also save the pictures of frames a-b as <side>_NNNNN.rgb (320x224 RGB), and
+-- the port's screens showing them as scr_NNNNN_<screen>.rgb.
 -- In a watch (no LS_FRAMES) the records start over every 18000 frames (<side>.rec.old: the last).
 local tools = os.getenv("LS_TOOLS") or "tools/mdlockstep"
 local dir = os.getenv("LIVE_DIR") or "/tmp/sonic-live"
@@ -96,7 +100,7 @@ local function picture_hash(px, w, x0, y0, Q)
 end
 local pics_a, pics_b = (os.getenv("LIVE_PICS") or ""):match("^(%d+)-(%d+)$")
 pics_a, pics_b = tonumber(pics_a or 1), tonumber(pics_b or 0)
-local function save_picture(k, px, w, x0, y0)
+local function save_picture(k, px, w, x0, y0, name)
   if k < pics_a or k > pics_b then return end
   local t = {}
   for y = y0, y0 + 223 do
@@ -105,7 +109,7 @@ local function save_picture(k, px, w, x0, y0)
       t[#t + 1] = string.char((c >> 16) & 255, (c >> 8) & 255, c & 255)
     end
   end
-  local f = io.open(fmt("%s/%s_%05d.rgb", dir, me, k), "wb"); f:write(table.concat(t)); f:close()
+  local f = io.open(name or fmt("%s/%s_%05d.rgb", dir, me, k), "wb"); f:write(table.concat(t)); f:close()
 end
 local function levels()                              -- ARGB -> 9-bit colour, cached per pixel value
   local lv = {}
@@ -231,11 +235,23 @@ if port then
     LIVE_SHOWN = sp:install_write_tap(SYM._sonic_shown, SYM._sonic_shown + 3, "live_shown", function(offset, data)
       shown = vint_of[data] or -1
     end)
+    -- every screen too: the notifier comes as MAME draws one (at the end of vblank), and
+    -- pixels() hold it at the next notifier
+    local drawn, drawn_busy = -1, 0
     LIVE_PIC = emu.add_machine_frame_notifier(function()
+      local px, w, h
+      if drawn >= 1 then
+        px, w = scr:pixels()
+        h = picture_hash(px, w, 88, 80, Q)
+        out(fmt("S %d %s %d", drawn + 1, hx(h), drawn_busy))
+        scr_n = (scr_n or 0) + 1
+        save_picture(drawn + 1, px, w, 88, 80, fmt("%s/scr_%05d_%d.rgb", dir, drawn + 1, scr_n))
+      end
+      drawn, drawn_busy = shown, sp:read_u32(SYM._sonic_busy)
       if pend then
         if pend == shown then
-          local px, w = scr:pixels()
-          out(fmt("P %d %s", pend + 1, hx(picture_hash(px, w, 88, 80, Q))))
+          if not px then px, w = scr:pixels(); h = picture_hash(px, w, 88, 80, Q) end
+          out(fmt("P %d %s", pend + 1, hx(h)))
           save_picture(pend + 1, px, w, 88, 80)
         end
         pend = nil

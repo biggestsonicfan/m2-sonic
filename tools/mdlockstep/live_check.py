@@ -136,6 +136,7 @@ class Check:
         self.recent = {}                      # field -> last frame it differed
         self.blocks = {'ram': {}, 'vram': {}}
         self.pics = {'same': 0, 'near': 0, 'diff': 0}; self.picdiff = []
+        self.scr = []; self.scrs = {'same': 0, 'near': 0, 'diff': 0, 'build': 0, 'swap': 0}; self.scrdiff = []
         self.events = {'ref': [[] for _ in VOICES], 'port': [[] for _ in VOICES]}
         self.voices = {'ref': RefVoices(lambda v, k, t: self.events['ref'][v].append((k, t))),
                        'port': PortVoices(lambda v, k, t: self.events['port'][v].append((k, t)))}
@@ -156,6 +157,8 @@ class Check:
         elif t[0] == 'P':
             if side == 'ref': self.pic['ref'][int(t[1])] = t[2]
             else: self.pic['port'].append((int(t[1]), t[2]))
+        elif t[0] == 'S':
+            self.scr.append((int(t[1]), t[2], int(t[3])))
         elif t[0] == 'Y':
             self.voices['ref'].write(*map(int, t[1:6]))
         elif t[0] == 'W':
@@ -197,6 +200,19 @@ class Check:
             elif h in (ref.get(k - 1), ref.get(k + 1)): self.pics['near'] += 1; self.picdiff.append((k, 'a frame off'))
             else: self.pics['diff'] += 1; self.picdiff.append((k, 'differs'))
         self.pic['port'] = keep
+        keep = []
+        for k, h, busy in self.scr:                  # every screen MAME drew on the port
+            ref = self.pic['ref']
+            if k not in ref:
+                if self.last['ref'] <= k + 1: keep.append((k, h, busy))
+                continue
+            if ref.get(k) == h: self.scrs['same'] += 1; continue
+            if h in (ref.get(k - 1), ref.get(k + 1)): self.scrs['near'] += 1; why = 'a frame off'
+            else: self.scrs['diff'] += 1; why = 'differs'
+            if busy == 1: self.scrs['build'] += 1; why += ' (mid-build)'
+            if busy == 2: self.scrs['swap'] += 1; why += ' (mid-swap)'
+            self.scrdiff.append((k, why))
+        self.scr = keep
         for k in [k for k in self.pic['ref'] if k < self.last['ref'] - 600]: del self.pic['ref'][k]
 
     # ---- notes: matched in order per voice ----
@@ -258,6 +274,8 @@ class Check:
         s = 'check %d: %s' % (k, 'DIFF ' + ' '.join(bad) if bad else 'same')
         s += ' (%d/%d)' % (self.allsame, self.n)
         s += '  pic %d/%d' % (self.pics['same'], sum(self.pics.values()))
+        ts = sum(self.scrs[x] for x in ('same', 'near', 'diff'))
+        if ts: s += '  scr %d/%d' % (self.scrs['same'], ts)
         t = self.notes_total()
         s += '  notes %d/%d' % (t['match'], t['match'] + t['missing'])
         if self.lags: s += ' +%df' % median(self.lags)
@@ -277,6 +295,11 @@ class Check:
         print('pictures the port drew: %d; same as MAME\'s of that frame %d, of the frame before/after %d, different %d' % (
             tp, self.pics['same'], self.pics['near'], self.pics['diff']))
         if self.picdiff: print('  ' + ', '.join('%d %s' % x for x in self.picdiff[:12]) + (' ...' if len(self.picdiff) > 12 else ''))
+        ts = sum(self.scrs[x] for x in ('same', 'near', 'diff'))
+        if ts:
+            print('screens MAME drew for the port: %d; same as MAME\'s of the frame shown %d, of the frame before/after %d, different %d; of those not the same, %d drawn while the next picture was built, %d while it went on screen' % (
+                ts, self.scrs['same'], self.scrs['near'], self.scrs['diff'], self.scrs['build'], self.scrs['swap']))
+            if self.scrdiff: print('  ' + ', '.join('%d %s' % x for x in self.scrdiff[:12]) + (' ...' if len(self.scrdiff) > 12 else ''))
         t = self.notes_total()
         print('notes (from frame %s, when the sound board answered): %d of %d played on the Model 2, %d not, %d extra' % (
             self.sound_up, t['match'], t['match'] + t['missing'], t['missing'], t['extra']))

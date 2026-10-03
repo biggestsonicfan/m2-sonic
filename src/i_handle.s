@@ -55,6 +55,8 @@ _irq_vblank:
 
 	mov     0, g14
 
+	subo	1, 0, g0
+	st		g0, 0x00f00008			# timer 2 = max: it counts the time since this vblank (sonic.c)
 	ld		_frameVBL, g0
 	addi    1, g0, g0
 	st		g0, _frameVBL			# frameVBL++
