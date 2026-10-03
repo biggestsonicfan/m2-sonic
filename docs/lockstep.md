@@ -33,6 +33,9 @@ to 32 bits. Each side writes `$LIVE_DIR/<side>.rec`:
 - **The picture:** at MAME's levels mapped to the Mega Drive's 3 bits a channel, so the
   two palettes compare. The port draws only some frames; each one it draws is checked
   against MAME's picture of the same frame.
+- **Every screen:** each screen MAME draws for the port (`S k hash b`), checked against
+  MAME's picture of the frame the port says it shows. `b` is what the i960 was doing when
+  it was drawn: 0 idle, 1 building the next picture, 2 putting it on screen (torn).
 - **The sound:** the reference's chip writes, the SCSP register writes the Model 2's
   sound board makes, and each side's loudness per frame. `live_check.py` turns both into
   notes per voice (FM1-6, PSG1-3, noise, drums), each a pitch in cents. A note matches
@@ -45,7 +48,8 @@ LS_FRAMES=1500 CART=... ROMS_M2=~/build/mameroms GAME=build tools/mdlockstep/liv
 
 - `LS_FRAMES`: no windows; stop at that frame and print the report (also `report.txt`).
 - `LIVE_CHECK=0`: only the lockstep, without the hashes.
-- `LIVE_PICS=a-b`: save both pictures of frames a-b as `<side>_NNNNN.rgb` (320x224 RGB).
+- `LIVE_PICS=a-b`: save both pictures of frames a-b as `<side>_NNNNN.rgb` (320x224 RGB),
+  and the port's screens as `scr_NNNNN_<screen>.rgb`.
 - `LIVE_DBG=1`: log the bytes the port has queued for the sound board at each frame.
 - `python3 tools/mdlockstep/live_check.py $LIVE_DIR` reports on a finished run.
 
@@ -55,12 +59,16 @@ Results, 3000 frames (title, Green Hill, measured 2026-10-03):
 |---|---|
 | everything (registers, RAM, VRAM, CRAM, VSRAM, VDP, chip writes) | 3000 of 3000 frames |
 | chip writes | 3000 of 3000 |
-| pictures | 996 of 1003 |
-| notes | 2108 of 2251, none extra; FM all, PSG2 all, noise 225/226, PSG1 417/546, drums 152/165 |
+| pictures | 1015 of 1020 |
+| screens MAME drew for the port | 2891 of 2907 |
+| notes | 2111 of 2253, none extra |
 | when | median 1 frame late |
 
-- The 7 differing pictures (472, 1497, 1905, 1987, 2069, 2151, 2429) are not explained yet;
-  the state they are drawn from is identical.
+- The 5 differing pictures (1497, 1619, 1823, 2069, 2151) are not explained yet; the state
+  they are drawn from is identical.
+- Screens: 2 were drawn while the picture went on screen: frame 451 (START) and 649 (the
+  title card), where the whole name table changes and the swap is longer than vblank.
+  The rest of the differing screens are the differing pictures above.
 - PSG1's missing notes are fast sweeps (a step a frame). The UART carries about 50 bytes a
   frame, so two steps sometimes reach the SCSP in the same frame.
 - Drums: their samples stream over the same line for the first ~340 frames, and the port

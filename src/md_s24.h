@@ -74,6 +74,8 @@ static u8  s24_nib_rev[256];             /* a byte with its two pixels swapped (
 static u16 s24_hsA[224], s24_hsB[224];   /* this frame's horizontal scroll per line */
 static u16 s24_hsA_w[224], s24_hsB_w[224];   /* ... as last written */
 static u8  s24_blank = 0xff;             /* display disabled, as last written */
+static u16 s24_vsA, s24_vsB;             /* this frame's vertical scroll, written at the swap */
+static u8  s24_blank_n;                  /* this frame's display disable, written at the swap */
 
 /* composites: the plane A cells sprites cover this frame, as rows of eight 4-bit pixels
  * (the leftmost in bits 31-28, as a pattern row) */
@@ -494,38 +496,12 @@ static __attribute__((noinline)) void s24_composite(void) {
             if (s24_bank_w[b][k] != c) { s24_bank_w[b][k] = c; S24_PAL[(S24_POOL0 + b) * 16 + k] = c; }
         }
     }
-    /* the swap, all at once: last frame's cells not composited now go back to plane A,
-     * then the new composite entries (their chars and colours are ready, unseen) */
-    for (i = 0; i < s24_nprev; i++)
-        if (!s24_cmp_of[s24_prev_cell[i]]) { s24_ntA[s24_prev[i]] = 0xffff; s24_nt(S24_LAYER_A, s24_ntA, s24_ntA_at, s24_prev[i]); }
-    s24_nprev = 0;
-    for (i = 0; i < s24_ncmp; i++) {
-        s24_cmp_t *rec = &s24_cmp[i];
-        if (!rec->ent) { s24_ntA[rec->gcell] = 0xffff; s24_nt(S24_LAYER_A, s24_ntA, s24_ntA_at, rec->gcell); continue; }
-        S24_TILE[S24_LAYER_A + rec->cell] = rec->ent;
-        s24_prev[s24_nprev] = rec->gcell; s24_prev_cell[s24_nprev++] = rec->cell;
-    }
-    s24_half ^= 1;
-    for (i = 0; i < s24_ncmp; i++) s24_cmp_of[s24_cmp[i].cell] = 0;
-    s24_ncomposited = (u32)s24_ncmp;
-    s24_ncmp = 0;
 }
 
-/* a name entry of plane A (layer 0) or B (layer 2), onto every copy of its cell */
-static void s24_nt(u32 layer, u16 *shadow, u32 base, u32 i) {
-    u16 e = md_vram[(base + i) & 0x7fff], t;
-    u32 x, y, pw = s24_pw, ph = s24_ph, gx = i & (pw - 1), gy = i >> (pw == 64 ? 6 : 5);
-    if (e == shadow[i]) return;
-    shadow[i] = e;
-    t = s24_entry(e);
-    for (y = gy; y < 64; y += ph) for (x = gx; x < 64; x += pw) S24_TILE[layer + y * 64 + x] = t;
-}
-
-/* ---- one frame -------------------------------------------------------------------------- */
-static __attribute__((noinline)) void s24_update(void) {
-    u32 ntA = ((u32)(md_reg[2] & 0x38) << 10) >> 1, ntB = ((u32)(md_reg[4] & 7) << 13) >> 1;
-    u32 hsb = ((u32)(md_reg[13] & 0x3f) << 10) >> 1, vsA, vsB, i, bg = md_reg[7] & 0x3f;
-    int blank = !(md_reg[1] & 0x40);
+/* the planes: the chars of patterns that changed, the name entries the game wrote (part of
+ * the swap: they are on screen as they are written) */
+static __attribute__((noinline)) void s24_planes(void) {
+    u32 ntA = ((u32)(md_reg[2] & 0x38) << 10) >> 1, ntB = ((u32)(md_reg[4] & 7) << 13) >> 1, i;
     u32 nd[64];
 
     if (s24_full) s24_flush();
@@ -576,36 +552,41 @@ static __attribute__((noinline)) void s24_update(void) {
         }
         s24_nt_all = 0;
     }
+}
 
-    /* scroll: per line (VDP register 11 modes), onto the per-line tables of layers 0 and 2 */
-    for (i = 0; i < 224; i++) {
-        u32 o;
-        switch (md_reg[11] & 3) {
-        case 0:  o = hsb; break;
-        case 2:  o = hsb + (i & ~7u) * 2; break;
-        case 3:  o = hsb + i * 2; break;
-        default: o = hsb + (i & 7) * 2; break;
+/* what s24_swap will take, in timer ticks (25 MHz): its work counted, at rates fitted to
+ * MAME runs (the name entries dominate: 1.7k a chunk the game wrote, up to 600k at a zone's
+ * start) */
+static u32 s24_swap_cost(void) {
+    u32 ntA = ((u32)(md_reg[2] & 0x38) << 10) >> 1, ntB = ((u32)(md_reg[4] & 7) << 13) >> 1;
+    u32 pw = (md_reg[16] & 3) == 0 ? 32 : 64, ph = ((md_reg[16] >> 4) & 3) == 0 ? 32 : 64, n = pw * ph;
+    u32 chars = 0, chunks = 0, w, c;
+    if (md_tile_any)
+        for (w = 0; w < 64; w++) {
+            u32 bits = md_tile_dirty[w], b;
+            for (b = 0; bits; b++, bits >>= 1) if (bits & 1) chars += (u32)s24_popc(s24_varmask[w * 32 + b]);
         }
-        s24_hsA[i] = md_vram[o & 0x7fff] & 0x3ff;
-        s24_hsB[i] = md_vram[(o + 1) & 0x7fff] & 0x3ff;
-        if (s24_hsA[i] != s24_hsA_w[i]) { s24_hsA_w[i] = s24_hsA[i]; S24_TILE[0x4000 + S24_Y0 + i] = (u16)((s24_hsA[i] + S24_X0) & 0x1ff); }
-        if (s24_hsB[i] != s24_hsB_w[i]) { s24_hsB_w[i] = s24_hsB[i]; S24_TILE[0x4400 + S24_Y0 + i] = (u16)((s24_hsB[i] + S24_X0) & 0x1ff); }
-    }
-    for (i = 224; i-- > 0; )
-        s24_hsrun[i] = (u8)(i < 223 && s24_hsA[i + 1] == s24_hsA[i] ? (s24_hsrun[i + 1] < 8 ? s24_hsrun[i + 1] + 1 : 8) : 1);
-    vsA = md_vsram[0] & 0x3ff; vsB = md_vsram[1] & 0x3ff;
-    if (blank != s24_blank) {
-        s24_blank = (u8)blank;
-        if (blank) { S24_TILE[0x5004] = 0x8000; S24_TILE[0x5006] = 0x8000; }
-    }
-    if (!blank) {
-        S24_TILE[0x5004] = (u16)((vsA - S24_Y0) & 0x1ff);
-        S24_TILE[0x5006] = (u16)((vsB - S24_Y0) & 0x1ff);
-        s24_sprites(vsA);
-    }
-    /* colours: the lines' banks, the backdrop (pen 0 of every variant bank). Last, with the
-     * composite swap: an update that runs past a vblank then shows the old colours with
-     * the old sprites, not this frame's palette (Sonic cycles it) over last frame's cells */
+    if (s24_full || s24_nt_all || pw != s24_pw || ph != s24_ph || ntA != s24_ntA_at || ntB != s24_ntB_at)
+        chunks = n / 8;
+    else if (md_tile_any)
+        for (c = 0; c < n / 16; c++) {
+            u32 ka = (ntA * 2 >> 5) + c, kb = (ntB * 2 >> 5) + c;
+            chunks += ((md_tile_dirty[(ka >> 5) & 63] >> (ka & 31)) & 1) + ((md_tile_dirty[(kb >> 5) & 63] >> (kb & 31)) & 1);
+        }
+    return 11500u + 361u * chars + 1713u * chunks + 94u * (u32)(s24_ncmp + s24_nprev);
+}
+
+/* the swap: what s24_build made goes on screen, all at once. The planes' changes, the
+ * colours (Sonic cycles them), last frame's cells not composited now going back to plane A,
+ * the scroll and the new composite entries (their chars and colours are ready, unseen). A screen drawn in
+ * the middle mixes two frames: the HUD, fixed on the Mega Drive's screen but composited
+ * into the scrolling plane A, then shows a scroll step off (it shook by up to 5 pixels
+ * when the scroll was written at the start of the build). MAME draws the Model 2's screen
+ * at the end of vblank: sonic.c starts the swap only when it ends before that (s24_swap_cost). */
+static __attribute__((noinline)) void s24_swap(void) {
+    u32 i, bg = md_reg[7] & 0x3f;
+    s24_planes();
+    /* colours: the lines' banks, the backdrop (pen 0 of every variant bank) */
     for (i = 0; i < 64; i++) {
         u16 c = md_cram[i];
         if (c == s24_cram[i]) continue;
@@ -624,7 +605,69 @@ static __attribute__((noinline)) void s24_update(void) {
         for (g = 0; g < 128; g++) if (s24_grp_line[g] != 0xff) S24_PAL[g * 16] = rgb;
         s24_bg = (u8)bg;
     }
+    for (i = 0; i < s24_nprev; i++)
+        if (!s24_cmp_of[s24_prev_cell[i]]) { s24_ntA[s24_prev[i]] = 0xffff; s24_nt(S24_LAYER_A, s24_ntA, s24_ntA_at, s24_prev[i]); }
+    s24_nprev = 0;
+    for (i = 0; i < 224; i++) {
+        if (s24_hsA[i] != s24_hsA_w[i]) { s24_hsA_w[i] = s24_hsA[i]; S24_TILE[0x4000 + S24_Y0 + i] = (u16)((s24_hsA[i] + S24_X0) & 0x1ff); }
+        if (s24_hsB[i] != s24_hsB_w[i]) { s24_hsB_w[i] = s24_hsB[i]; S24_TILE[0x4400 + S24_Y0 + i] = (u16)((s24_hsB[i] + S24_X0) & 0x1ff); }
+    }
+    if (s24_blank_n != s24_blank) {
+        s24_blank = s24_blank_n;
+        if (s24_blank) { S24_TILE[0x5004] = 0x8000; S24_TILE[0x5006] = 0x8000; }
+    }
+    if (!s24_blank) {
+        S24_TILE[0x5004] = (u16)((s24_vsA - S24_Y0) & 0x1ff);
+        S24_TILE[0x5006] = (u16)((s24_vsB - S24_Y0) & 0x1ff);
+    }
+    for (i = 0; i < s24_ncmp; i++) {
+        s24_cmp_t *rec = &s24_cmp[i];
+        if (!rec->ent) { s24_ntA[rec->gcell] = 0xffff; s24_nt(S24_LAYER_A, s24_ntA, s24_ntA_at, rec->gcell); continue; }
+        S24_TILE[S24_LAYER_A + rec->cell] = rec->ent;
+        s24_prev[s24_nprev] = rec->gcell; s24_prev_cell[s24_nprev++] = rec->cell;
+    }
+    s24_half ^= 1;
+    for (i = 0; i < s24_ncmp; i++) s24_cmp_of[s24_cmp[i].cell] = 0;
+    s24_ncomposited = (u32)s24_ncmp;
+    s24_ncmp = 0;
+}
+
+/* a name entry of plane A (layer 0) or B (layer 2), onto every copy of its cell */
+static void s24_nt(u32 layer, u16 *shadow, u32 base, u32 i) {
+    u16 e = md_vram[(base + i) & 0x7fff], t;
+    u32 x, y, pw = s24_pw, ph = s24_ph, gx = i & (pw - 1), gy = i >> (pw == 64 ? 6 : 5);
+    if (e == shadow[i]) return;
+    shadow[i] = e;
+    t = s24_entry(e);
+    for (y = gy; y < 64; y += ph) for (x = gx; x < 64; x += pw) S24_TILE[layer + y * 64 + x] = t;
+}
+
+/* ---- one frame -------------------------------------------------------------------------- */
+/* the next picture, built off screen (s24_swap shows it) */
+static __attribute__((noinline)) void s24_build(void) {
+    u32 hsb = ((u32)(md_reg[13] & 0x3f) << 10) >> 1, vsA, vsB, i;
+    int blank = !(md_reg[1] & 0x40);
+
+    /* scroll: per line (VDP register 11 modes), onto the per-line tables of layers 0 and 2 */
+    for (i = 0; i < 224; i++) {
+        u32 o;
+        switch (md_reg[11] & 3) {
+        case 0:  o = hsb; break;
+        case 2:  o = hsb + (i & ~7u) * 2; break;
+        case 3:  o = hsb + i * 2; break;
+        default: o = hsb + (i & 7) * 2; break;
+        }
+        s24_hsA[i] = md_vram[o & 0x7fff] & 0x3ff;
+        s24_hsB[i] = md_vram[(o + 1) & 0x7fff] & 0x3ff;
+    }
+    for (i = 224; i-- > 0; )
+        s24_hsrun[i] = (u8)(i < 223 && s24_hsA[i + 1] == s24_hsA[i] ? (s24_hsrun[i + 1] < 8 ? s24_hsrun[i + 1] + 1 : 8) : 1);
+    vsA = md_vsram[0] & 0x3ff; vsB = md_vsram[1] & 0x3ff;
+    s24_vsA = (u16)vsA; s24_vsB = (u16)vsB; s24_blank_n = (u8)blank;
+    if (!blank) s24_sprites(vsA);
     s24_composite();
 }
+
+static void s24_update(void) { s24_build(); s24_swap(); }
 
 #endif /* MD_S24_H */

@@ -87,6 +87,11 @@ static u32 t_cpu, t_vid;
 /* for tools/mdlockstep: the Mega Drive frame whose picture the tilemaps now hold */
 static volatile u32 sonic_shown __attribute__((used));
 static volatile u32 sonic_busy __attribute__((used));
+/* timer 2 counts down from 0xffffffff from each vblank interrupt (src/i_handle.s) */
+#define M2_TIMER2 (*(volatile u32 *)0x00f00008u)
+#define M2_FRAME_T 434600u              /* timer ticks (25 MHz) a Model 2 frame: 16 MHz / 656 / 424 */
+#define M2_DRAW_T  41000u               /* ... from the interrupt (line 384) to the end of vblank */
+static u32 swap_err = 20000u;           /* how much longer s24_swap took than s24_swap_cost said: recent most */
 
 static void num(char *s, u32 v, int w) {
     int i;
@@ -166,9 +171,29 @@ int main(void) {
             frames++;
         }
         sonic_busy = 1;                 /* tools/mdlockstep: the tilemaps are changing */
-        { u32 t = M2_TIMER3; s24_update(); t_vid += t - M2_TIMER3; draws++; }
+        {
+            u32 t = M2_TIMER3, v, since, ts, cost, est;
+            s24_build();
+            cost = s24_swap_cost();
+            est = cost + swap_err + 4000u;
+            /* The swap must not span the moment the screen is drawn: MAME draws the Model 2's
+             * at the end of vblank (VIDEO_UPDATE_AFTER_VBLANK), M2_DRAW_T after the interrupt.
+             * When it would, wait for that moment to pass. */
+            v = frameVBL; since = 0xffffffffu - M2_TIMER2;
+            if (since < M2_DRAW_T ? since + est > M2_DRAW_T : since + est > M2_FRAME_T + M2_DRAW_T) {
+                if (since >= M2_DRAW_T) while (frameVBL == v) { }
+                while (0xffffffffu - M2_TIMER2 < M2_DRAW_T + 1000u) { }
+            }
+            ts = M2_TIMER3;
+            sonic_busy = 2;             /* ... and now going on screen */
+            s24_swap();
+            sonic_shown = md_frames;    /* the Mega Drive frame the screen now shows */
+            ts -= M2_TIMER3;
+            ts = ts > cost ? ts - cost : 0;
+            swap_err = ts > swap_err ? ts : swap_err - swap_err / 16;
+            t_vid += t - M2_TIMER3; draws++;
+        }
         sonic_busy = 0;
-        sonic_shown = md_frames;        /* the Mega Drive frame the next picture shows */
         if (frameVBL - t0 >= 60) {      /* speed = emulated frames against real Mega Drive time */
             u32 el = frameVBL - t0;
             num(buf, frames * (100000u * (M2_HZ / 8u) / (MD_HZ / 8u)) / (el * 1000u), 3);

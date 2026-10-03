@@ -40,8 +40,14 @@
   colours in shared 15-colour banks (a rare cell of more than 15 takes the nearest). The
   sprites follow MAME's line rules: its masking (a sprite at x = 0 and one at 0 < x < 0x40)
   and 320 sprite pixels a line. Composites are built in one half of a group pool while
-  the other half is on screen, then swapped in one pass. The 320x224 picture is at (88,80) of
-  the 496x384 screen.
+  the other half is on screen. The 320x224 picture is at (88,80) of
+  the 496x384 screen. A picture is built (`s24_build`: scroll values, sprites, composites)
+  without touching what is shown, then put on screen in one pass (`s24_swap`: patterns,
+  name tables, colours, scroll, composites), so the HUD (sprites composited into scrolling
+  plane A) never meets a scroll of another frame. MAME draws the screen at the end of
+  vblank, 41000 timer ticks after the interrupt; timer 2, reloaded at each vblank
+  (`src/i_handle.s`), says where the i960 is, and `sonic.c` waits when the swap
+  (`s24_swap_cost` plus its recent error) would span that moment.
 - **Timing:** the Mega Drive runs at 59.92 Hz, the Model 2 at 57.52 Hz; each vblank runs the
   frames due (up to 4) and draws once, so busy scenes draw fewer pictures instead of slowing
   down.
@@ -79,6 +85,8 @@ output against the reference renderer.
   frame. No window plane, shadow/highlight or sprite line limits (Sonic 1 doesn't need them).
 - Sound: FM detune, LFO, SSG-EG and envelope curves are approximate; the SEGA voice at boot
   (the 68000 drives the DAC itself) is silent; the timpani uploads last (~20 s after boot).
+- A swap that rewrites the whole name table (the title card) takes longer than vblank, so
+  that one screen is torn.
 - Busy scenes (Marble Zone's lava, the Special Stage) draw 12-25 pictures a second.
 - The program ROM has about 1.5 KB left (the recompiled code fills it); `md_z80.h` is
   compiled `-Os` for that reason.
