@@ -67,8 +67,8 @@ per second, and the i960's time per Mega Drive frame and per picture, in thousan
 
 ## Status
 
-- Runs in MAME (native and web) at 97% game speed and 30 pictures a second in play;
-  busy scenes (Marble Zone, Spring Yard) slow to 70-85% at 10-13 pictures a second
+- Runs in MAME (native and web) at 98% game speed and 36 pictures a second in play;
+  busy scenes (Marble Zone, Spring Yard) slow to 75-92% at 12-15 pictures a second
   ([docs/port.md](docs/port.md), "Not done").
 - Checked against MAME's own Mega Drive over 3000 frames ([docs/lockstep.md](docs/lockstep.md)):
   the 68000 runs cycle for cycle with MAME's (every VINT within 2-7 cycles), so registers,
