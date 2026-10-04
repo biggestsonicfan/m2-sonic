@@ -125,7 +125,17 @@ static u32 md_ym_busy_end;              /* the YM2612 is busy until then */
 static u32 md_waits;                    /* wait-state cycles the board added (tools/mdlock) */
 #define MD_YM_BUSY 192                  /* ymfm: 32 x prescale 6 clocks of its 7.67 MHz */
 static inline u32 md_now(void) { return md_clock_base - (u32)m68k.cycles; }
+#ifndef MD_NO_Z80_TIMING
 #include "md_z80.h"                    /* the Z80 sound driver's timing: $A01FFD */
+#else
+/* -DMD_NO_Z80_TIMING: no Z80 timing, the YM2612 never busy: the 68000's sound driver never
+ * waits, so the game runs faster than MAME's and no longer in step with it */
+#define mz_sync()       ((void)0)
+#define mz_busreq(r)    ((void)0)
+#define mz_reset_w(r)   ((void)0)
+#define mz_frame()      ((void)0)
+#define mz_init()       ((void)0)
+#endif
 
 /* ---- interrupts ------------------------------------------------------------------------ */
 /* MAME: the level-6 line is up while a VINT is pending and register 1 enables it; the
@@ -388,7 +398,11 @@ static __attribute__((noinline)) u32 md_rd_slow(u32 a, int word) {
     if (a < 0xa10000) {                                 /* Z80 space */
         m68k.cycles -= 1; md_waits++;                    /* MAME: a wait state on the Z80 bus */
         if (a >= 0xa04000 && a < 0xa06000)              /* YM2612 status: busy after a write */
+#ifndef MD_NO_Z80_TIMING
             return (int)(md_ym_busy_end - md_now()) > 0 ? 0x80 : 0;
+#else
+            return 0;
+#endif
         if (a < 0xa02000 || (a >= 0xa02000 && a < 0xa04000)) {
             u32 o = a & 0x1fff;
             mz_sync();
@@ -514,6 +528,9 @@ static void md_reset(void) {
     md_vaddr = 0; md_vcode = 0; md_cmd_pending = 0; md_fill_pending = 0;
     md_irq6_pending = md_irq4_pending = 0; md_irq4counter = -1; md_vblank = 0;
     md_zbusreq = 0; md_zreset = 1; mz_init();
+#ifdef MD_RECOMP
+    md_rc_init();
+#endif
     md_io_data[0] = md_io_data[1] = md_io_data[2] = 0x7f;
     md_io_ctrl[0] = md_io_ctrl[1] = md_io_ctrl[2] = 0;
     md_line = 0;
@@ -567,7 +584,7 @@ static void md_run(int cyc, int line0, int off) {
         if (m68k_irq_pending()) { MD_INTERRUPT(); md_idle = 0; }
         if (m68k.stopped) { m68k.cycles = 0; md_cyc_owed = 0; break; }
 #ifdef MD_RECOMP
-        if (md_interp || !md_rc_run()) MD_STEP();
+        if (md_interp || !md_rc_entry(m68k.pc) || !md_rc_run()) MD_STEP();
 #else
         MD_STEP();
 #endif

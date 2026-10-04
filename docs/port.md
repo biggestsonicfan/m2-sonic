@@ -58,7 +58,10 @@
   PSG plays a square wave and the SCSP's noise; the drums are decoded from the Z80 DAC
   driver the game loads into Z80 RAM and played at its rate. The UART is fed by its
   interrupt (board IRQ bit 10, `m2_scsp_irq_start`; `src/i_handle.s` is the SDK's with the
-  vector-15 handler calling it), so a busy i960 still sends at full rate.
+  vector-15 handler calling it), so a busy i960 still sends at full rate. The interrupt is
+  enabled only while bytes wait: an idle i8251 keeps TxRDY up and MAME's signals it again at
+  every bit clock, so left on it interrupted the i960 ~480 times a frame for nothing (11% of
+  its time in busy scenes, 59% game speed at worst in the attract mode; 69% without).
 
 ## How it was checked
 
@@ -70,7 +73,7 @@
 | recompiled code | `m68krecomp.py --exact` vs the interpreter, RAM per frame (`mdhost -m`) | identical, 7 zones x 2500 frames |
 | System 24 video | `tools/mds24.c`: the tile/char/palette RAM drawn as MAME's `model2_v.cpp` + `segaic24.cpp` compose it, against a reference renderer (`src/md_render.h`) | 0 pixels differ in 596 of 600 sampled frames (20 zones); 14 pixels in the other 4 (sprite priority, below) |
 | sound | ymfm (MAME's YM2612) rendering the same register writes vs MAME's recording of the Model 2 | the pitches agree (e.g. 98/100, 247/246, 488/492 Hz) |
-| MAME | native and web (Pinboard) Model 2 builds | attract mode and play at 99-100% game speed, 20-50 pictures/s |
+| MAME | native and web (Pinboard) Model 2 builds; game speed and pictures per 300 frames from a Lua script | play (the lockstep's input script, 3000 frames): 98% game speed, 36 pictures/s; attract mode (6000 frames): 93%, 25 pictures/s, 75% at worst (Spring Yard, Marble Zone) |
 
 `tools/mdhost.c` runs the whole thing on a PC (pictures, RAM, profiles; `-t` a per-instruction
 time trace); `tools/m68k_cyc.c` makes the cycle table from Musashi and
@@ -87,8 +90,19 @@ output against the reference renderer.
   (the 68000 drives the DAC itself) is silent; the timpani uploads last (~20 s after boot).
 - A swap that rewrites the whole name table (the title card) takes longer than vblank, so
   that one screen is torn.
-- Busy scenes (Marble Zone's lava, the Special Stage) draw 12-25 pictures a second.
-- The program ROM has about 1.5 KB left (the recompiled code fills it); `md_z80.h` is
-  compiled `-Os` for that reason.
+- Busy scenes (Marble Zone, Spring Yard) run slow: 75-92% game speed at 12-15 pictures a
+  second. There the 68000 takes about 40% of the i960 (recompiled code 32%, the interpreter
+  8%) and the sprite composites (`s24_sprites`, `s24_composite`, `s24_rec`) about 32%; the
+  sound and the Z80 timing 1-2%. No single line is above 1.3%. What made it cheaper: MAME's
+  i960 charges 18 cycles a multiply (`mulo`) and 4 a load, so the composite records are 128
+  bytes (indexed by a shift), char RAM rows are one 32-bit store, and the recompiler's
+  dispatch hash is `(pc>>1)^(pc>>7)` in RAM with a bitmap of block entries the run loop
+  checks before calling `md_rc_run`. Switches for trying it
+  (`-DSONIC_DEFS="..."` to cmake): `MD_CATCH_UP=8` (up to 8 frames between pictures, default
+  4: 97% game speed in the attract mode, but 7 pictures a second at the worst),
+  `MD_NO_Z80_TIMING` (no Z80 timing, YM2612 never busy: no longer in step with MAME's
+  genesis), `SONIC_NO_SOUND`.
+- The program ROM has about 19 KB left (the recompiled code fills most of it); `md_z80.h`
+  is compiled `-Os` for that reason.
 - Runs in MAME only so far: not tried on real hardware or m2emulator (the sound relay's
   caveats are Pac-Man's: m2-pacman `docs/sound.md`).
