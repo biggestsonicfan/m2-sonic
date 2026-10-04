@@ -13,18 +13,24 @@
  * sound EPROM the game runs silent ("NO SOUND" on the panel).
  *
  * ROM: `python3 tools/mdrom.py sonic.bin` writes src/sonic_rom.h (gitignored, Sega data).
+ * The cartridge is not linked in: it goes in sfight's data EPROM pair (tools/cart2rom.py),
+ * read at MD_ROM_AT, which leaves the program EPROMs to the recompiled 68000 code.
  *
  * Controls (Model 2 -> Mega Drive pad 1): P1 stick = D-pad, button 1 = A, 2 = B, 3 = C,
  * START 1 = START.
  *
- * Build:  cmake -B build && make -C build   ->  roms/sonic/ (the three EPROMs over sfight)
+ * Build:  cmake -B build && make -C build   ->  roms/sonic/ (the five EPROMs over sfight)
  */
 #include "m2.h"
 
 #if !__has_include("sonic_rom.h")
 #error "src/sonic_rom.h missing: python3 tools/mdrom.py <Sonic the Hedgehog ROM>"
 #endif
+#define md_rom md_rom_image           /* the host tools' array: unused here, so not linked */
 #include "sonic_rom.h"
+#undef md_rom
+#define MD_ROM_AT 0x03000000u           /* data EPROMs epr-19003.7/19004.8 (MAME main_data + 0x1000000) */
+#define md_rom ((const u16 *)MD_ROM_AT)
 
 static u32 md_insns;                    /* 68000 instructions run (the panel's statistics) */
 #if __has_include("sonic_recomp.h") && !defined(SONIC_NO_RECOMP)

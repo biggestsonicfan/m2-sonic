@@ -24,6 +24,7 @@ i960-elf-nm "$GAME/game.elf" | grep -E " _(md_(irq_snap|ram|vram|cram|vsram|reg|
 # the EPROMs from that same game.elf, so the symbols match
 i960-elf-objcopy -O binary "$GAME/game.elf" "$LIVE_DIR/game.bin"
 python3 "${M2_SDK:-$repo/../m2-sdk}/tools/stfbin2rom.py" --input "$LIVE_DIR/game.bin" --output "$LIVE_DIR/roms/sfight" > /dev/null
+python3 "$repo/tools/cart2rom.py" "$repo/src/sonic_rom.h" "$LIVE_DIR/roms/sfight" > /dev/null
 python3 "$repo/tools/snd2rom.py" "$repo/snd/scsp_passthru.bin" "$LIVE_DIR/roms/sfight" > /dev/null
 if [ -n "$LS_FRAMES" ]; then
   export SDL_VIDEODRIVER=dummy

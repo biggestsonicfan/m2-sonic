@@ -4,7 +4,7 @@ Sega's **Sonic the Hedgehog** (Mega Drive) running on a **Sega Model 2B** board:
 Drive, as far as Sonic needs it, ported to the board's Intel i960KB, with the 68000
 emulated (and its hot code statically recompiled), the picture on the Model 2's tilemaps
 and the music re-voiced on its SCSP. It runs as a replacement for Sonic the Fighters
-(`sfight`): three EPROMs are swapped, everything else on the board, or in the romset, is
+(`sfight`): five EPROMs are swapped, everything else on the board, or in the romset, is
 stock.
 
 This repository has the port and its documentation: the game (`src/`), its 68000 core,
@@ -20,15 +20,17 @@ relay) and the tools (`tools/`). It is built against
   frame: registers, memory, VDP, sound writes, pictures, audio
 - [docs/mame.md](docs/mame.md): the MAME used and how to build it
 
-## The three EPROMs
+## The five EPROMs
 
 | File | What | Made from |
 |---|---|---|
-| `epr-19001.15`, `epr-19002.16` | i960 program | `src/sonic.c` + the cartridge |
+| `epr-19001.15`, `epr-19002.16` | i960 program | `src/sonic.c` + the recompiled 68000 code |
+| `epr-19003.7`, `epr-19004.8` | the cartridge (data EPROMs, read at `0x03000000`) | your cartridge image (`tools/cart2rom.py`) |
 | `epr-19021.31` | sound board 68000 program | `snd/scsp_passthru.s`, the SCSP relay (m2-pacman `docs/sound.md`) |
 
-The cartridge is compiled into the program EPROMs; none of it is in the repository
-(`tools/mdrom.py` reads your image). The program ROM is 1 MB, half of it the game.
+None of the cartridge is in the repository (`tools/mdrom.py` reads your image). It sits in
+sfight's data EPROM pair, so the 1 MB program ROM is all the port's: about half of it is
+recompiled 68000 code (99.6% of the instructions the game runs).
 
 ## Building
 
@@ -40,7 +42,7 @@ python3 tools/mdrom.py Sonic_The_Hedgehog.bin     # -> src/sonic_rom.h (Sega dat
 tools/sonic_recomp.sh                             # -> src/sonic_recomp.h (optional: the recompiled hot
                                                   #    code; without it the game runs slower)
 cmake -G "Unix Makefiles" -B build
-make -C build -j2                                 # -> roms/sonic/
+make -C build -j2                                 # -> roms/sonic/ (the five EPROMs)
 ```
 
 Checked with Sonic the Hedgehog (W) (REV00), 512 KB, sha1
@@ -48,14 +50,14 @@ Checked with Sonic the Hedgehog (W) (REV00), 512 KB, sha1
 
 ## Running
 
-MAME's Model 2 driver: the three files in a folder named `sfight`, listed before the
+MAME's Model 2 driver: the five files in a folder named `sfight`, listed before the
 folder with the stock `sfight.zip`, `schamp.zip` and `segabill.zip`:
 
 ```sh
 mame sfight -rompath "/path/with/sfight-folder;/path/to/stock/roms"
 ```
 
-MAME reports WRONG CHECKSUMS for exactly those three files; that is expected.
+MAME reports WRONG CHECKSUMS for exactly those five files; that is expected.
 
 Controls (Model 2 -> Mega Drive pad): stick = D-pad, button 1 = A, 2 = B, 3 = C, START 1 =
 START.
@@ -68,7 +70,7 @@ per second, and the i960's time per Mega Drive frame and per picture, in thousan
 ## Status
 
 - Runs in MAME (native and web) at 98% game speed and 36 pictures a second in play;
-  busy scenes (Marble Zone, Spring Yard) slow to 75-92% at 12-15 pictures a second
+  busy scenes (Marble Zone, Spring Yard) slow to 79-96% at 12-17 pictures a second
   ([docs/port.md](docs/port.md), "Not done").
 - Checked against MAME's own Mega Drive over 3000 frames ([docs/lockstep.md](docs/lockstep.md)):
   the 68000 runs cycle for cycle with MAME's (every VINT within 2-7 cycles), so registers,

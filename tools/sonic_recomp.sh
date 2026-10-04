@@ -2,7 +2,8 @@
 # sonic_recomp.sh [scratch dir]: make src/sonic_recomp.h, the statically recompiled hot
 # 68000 code of src/sonic.c. Profiles Sonic on the host (tools/mdhost.c): the attract mode
 # (30000 frames), a Green Hill play, and every zone through the level select
-# (tools/mdzone.py), then translates the 4200 most run instructions (tools/m68krecomp.py).
+# (tools/mdzone.py), then translates the 9500 most run instructions (tools/m68krecomp.py):
+# what fits the program ROM, the cartridge being in the data EPROMs (tools/cart2rom.py).
 # Needs src/sonic_rom.h (tools/mdrom.py). The output is derived from the game: gitignored.
 set -e
 cd "$(dirname "$0")/.."
@@ -15,5 +16,5 @@ cc -O2 -Isrc -o "$W/mdhost" tools/mdhost.c
 for z in $(seq 0 19); do
     "$W/mdhost" -f 3000 $(python3 tools/mdzone.py $z 2500) -P "$W/prof" -A > /dev/null
 done
-python3 tools/m68krecomp.py src/sonic_rom.h src/sonic_recomp.h -p "$W/prof"
+python3 tools/m68krecomp.py src/sonic_rom.h src/sonic_recomp.h -p "$W/prof" --budget 9500
 echo "profile in $W (prof.op/.pc/.ent, 64 MB): delete it when done"

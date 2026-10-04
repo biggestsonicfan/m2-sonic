@@ -1,5 +1,5 @@
 -- mdlockstep/port.lua: the i960 port (src/sonic.c) under MAME's Model 2 driver, sfight with
--- the three EPROMs swapped. Records what ref.lua records, from the port's own variables
+-- the five EPROMs swapped. Records what ref.lua records, from the port's own variables
 -- (symbols from $LS_OUT/port.syms, `i960-elf-nm game.elf`):
 --   port_irq.bin / port_mem.bin at every interrupt the 68000 takes (md_irq_snap: a write
 --   tap on its count, written last), port_snd.bin from the port's chip-write queue (md_snd,

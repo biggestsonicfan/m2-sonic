@@ -744,7 +744,7 @@ def main():
     ap.add_argument('out')
     ap.add_argument('-p', '--profile', action='append', required=True)
     ap.add_argument('--cyc', default=os.path.join(os.path.dirname(__file__), '..', 'src', 'm2_m68k_cyc.h'))
-    ap.add_argument('--budget', type=int, default=4200, help='instructions to translate (the most run)')
+    ap.add_argument('--budget', type=int, default=9500, help='instructions to translate (the most run)')
     ap.add_argument('--exact', action='store_true', help='end the run after any instruction, as the interpreter')
     ap.add_argument('--locals', action='store_true',
                     help='the 68000 registers and flags in C locals (4%% faster, 20%% more code)')
