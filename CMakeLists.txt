@@ -69,9 +69,10 @@ if(M2_EMU_SHRO)
         "${Python3_EXECUTABLE};${CMAKE_SOURCE_DIR}/tools/emu_shro.py")
 endif()
 
-# roms/<game>/: the program EPROM pair (the SDK's stfbin2rom.py), the sound program EPROM
-# (snd/scsp_passthru.bin: the i960 drives the SCSP), so sfight + these three files is a
-# complete set, and the flat image tools/m2_load.lua boots on a stock sfight romset.
+# roms/<game>/: the program EPROM pair (the SDK's stfbin2rom.py), the data EPROM pair with
+# the cartridge (tools/cart2rom.py: src/sonic_rom.h, read at 0x03000000), the sound program
+# EPROM (snd/scsp_passthru.bin: the i960 drives the SCSP), so sfight + these five files is a
+# complete set, plus game.bin (the program EPROMs as one flat image).
 # Always-run, so a deleted roms/ is regenerated even when game.elf is unchanged.
 set(ROM_DIR "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}")
 add_custom_target(rom ALL
@@ -79,11 +80,13 @@ add_custom_target(rom ALL
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
     COMMAND ${Python3_EXECUTABLE} "${M2_SDK}/tools/stfbin2rom.py"
             --input game.bin --output "${ROM_DIR}"
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/cart2rom.py"
+            "${CMAKE_SOURCE_DIR}/src/${M2_GAME}_rom.h" "${ROM_DIR}"
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/snd2rom.py"
             "${CMAKE_SOURCE_DIR}/snd/scsp_passthru.bin" "${ROM_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy game.bin "${ROM_DIR}/game.bin"
     COMMAND ${CMAKE_COMMAND} -E echo
-            "BUILD OK (${M2_GAME}):  roms/${M2_GAME}/: epr-19001.15  epr-19002.16  epr-19021.31 (sound)  game.bin"
+            "BUILD OK (${M2_GAME}):  roms/${M2_GAME}/: epr-19001.15  epr-19002.16  epr-19003.7  epr-19004.8 (cartridge)  epr-19021.31 (sound)  game.bin"
     DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)

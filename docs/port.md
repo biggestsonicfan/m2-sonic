@@ -7,8 +7,8 @@
   68000 by `tools/m68k_cyc_mame.py`; MUL/DIV and the bit ops' data-dependent times as MAME
   has them). Checked against Musashi one instruction at a time (`tools/mdlock`, below), and
   timed opcode by opcode against MAME (`tools/optiming`). The hot code is statically recompiled
-  (`tools/m68krecomp.py`, the pattern of Pac-Man's `z80recomp.py`): the 4200 most run
-  instructions (97.8% of what runs) become C with constant operands, flags computed only
+  (`tools/m68krecomp.py`, the pattern of Pac-Man's `z80recomp.py`): the 9500 most run
+  instructions (99.6% of what runs) become C with constant operands, flags computed only
   where read, gotos between blocks and a hash for returns and indirect jumps; everything
   else runs on the interpreter. An idle skip ends the frame in the game's WaitForVBla loop.
 - **Board:** `src/md_hw.h`: memory map, the VDP's ports, DMA, VINT/HINT, 3-button pads, as
@@ -73,7 +73,7 @@
 | recompiled code | `m68krecomp.py --exact` vs the interpreter, RAM per frame (`mdhost -m`) | identical, 7 zones x 2500 frames |
 | System 24 video | `tools/mds24.c`: the tile/char/palette RAM drawn as MAME's `model2_v.cpp` + `segaic24.cpp` compose it, against a reference renderer (`src/md_render.h`) | 0 pixels differ in 596 of 600 sampled frames (20 zones); 14 pixels in the other 4 (sprite priority, below) |
 | sound | ymfm (MAME's YM2612) rendering the same register writes vs MAME's recording of the Model 2 | the pitches agree (e.g. 98/100, 247/246, 488/492 Hz) |
-| MAME | native and web (Pinboard) Model 2 builds; game speed and pictures per 300 frames from a Lua script | play (the lockstep's input script, 3000 frames): 98% game speed, 36 pictures/s; attract mode (6000 frames): 93%, 25 pictures/s, 75% at worst (Spring Yard, Marble Zone) |
+| MAME | native and web (Pinboard) Model 2 builds; game speed and pictures per 300 frames from a Lua script | play (the lockstep's input script, 3000 frames): 98% game speed, 36 pictures/s; attract mode (6000 frames): 95.7%, 26.7 pictures/s, 79% at worst (Spring Yard, Marble Zone; 93.5%, 25.2, 73% with 4200 instructions recompiled) |
 
 `tools/mdhost.c` runs the whole thing on a PC (pictures, RAM, profiles; `-t` a per-instruction
 time trace); `tools/m68k_cyc.c` makes the cycle table from Musashi and
@@ -87,12 +87,12 @@ output against the reference renderer.
 - Per-line palette changes (Labyrinth Zone's water colours) are not shown: one palette per
   frame. No window plane, shadow/highlight or sprite line limits (Sonic 1 doesn't need them).
 - Sound: FM detune, LFO, SSG-EG and envelope curves are approximate; the SEGA voice at boot
-  (the 68000 drives the DAC itself) is silent; the timpani uploads last (~20 s after boot).
+  (the Z80 plays it from the cartridge; the port has no Z80, only its timing) is silent; the timpani uploads last (~20 s after boot).
 - A swap that rewrites the whole name table (the title card) takes longer than vblank, so
   that one screen is torn.
-- Busy scenes (Marble Zone, Spring Yard) run slow: 75-92% game speed at 12-15 pictures a
+- Busy scenes (Marble Zone, Spring Yard) run slow: 79-96% game speed at 12-17 pictures a
   second. There the 68000 takes about 40% of the i960 (recompiled code 32%, the interpreter
-  8%) and the sprite composites (`s24_sprites`, `s24_composite`, `s24_rec`) about 32%; the
+  8%, measured with 4200 instructions recompiled) and the sprite composites (`s24_sprites`, `s24_composite`, `s24_rec`) about 32%; the
   sound and the Z80 timing 1-2%. No single line is above 1.3%. What made it cheaper: MAME's
   i960 charges 18 cycles a multiply (`mulo`) and 4 a load, so the composite records are 128
   bytes (indexed by a shift), char RAM rows are one 32-bit store, and the recompiler's
@@ -102,7 +102,12 @@ output against the reference renderer.
   4: 97% game speed in the attract mode, but 7 pictures a second at the worst),
   `MD_NO_Z80_TIMING` (no Z80 timing, YM2612 never busy: no longer in step with MAME's
   genesis), `SONIC_NO_SOUND`.
-- The program ROM has about 19 KB left (the recompiled code fills most of it); `md_z80.h`
-  is compiled `-Os` for that reason.
+- The program ROM has about 24 KB left (the recompiled code fills most of it); `md_z80.h`
+  is compiled `-Os` for that reason. The cartridge is not in it: `tools/cart2rom.py` puts it
+  in sfight's data EPROM pair (`epr-19003.7`/`epr-19004.8`, MAME's `main_data` + 0x1000000),
+  which the i960 reads at 0x03000000 (`MD_ROM_AT` in `src/sonic.c`). With the 512 KB game in
+  the program ROM only 4200 instructions (97.8%) fitted; the SEGA voice, the one part of the
+  cartridge the port never reads (the 27 KB at $79688, played by the Z80), would have made
+  room for only ~300 more, at ~90 bytes of i960 code each.
 - Runs in MAME only so far: not tried on real hardware or m2emulator (the sound relay's
   caveats are Pac-Man's: m2-pacman `docs/sound.md`).
