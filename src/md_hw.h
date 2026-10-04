@@ -528,6 +528,9 @@ static void md_reset(void) {
     md_vaddr = 0; md_vcode = 0; md_cmd_pending = 0; md_fill_pending = 0;
     md_irq6_pending = md_irq4_pending = 0; md_irq4counter = -1; md_vblank = 0;
     md_zbusreq = 0; md_zreset = 1; mz_init();
+#ifdef MD_RECOMP
+    md_rc_init();
+#endif
     md_io_data[0] = md_io_data[1] = md_io_data[2] = 0x7f;
     md_io_ctrl[0] = md_io_ctrl[1] = md_io_ctrl[2] = 0;
     md_line = 0;
@@ -581,7 +584,7 @@ static void md_run(int cyc, int line0, int off) {
         if (m68k_irq_pending()) { MD_INTERRUPT(); md_idle = 0; }
         if (m68k.stopped) { m68k.cycles = 0; md_cyc_owed = 0; break; }
 #ifdef MD_RECOMP
-        if (md_interp || !md_rc_run()) MD_STEP();
+        if (md_interp || !md_rc_entry(m68k.pc) || !md_rc_run()) MD_STEP();
 #else
         MD_STEP();
 #endif

@@ -825,30 +825,35 @@ def main():
     w('#define RC_LOCALS %d' % (0 if (not a.locals) else 1))
     w(PROLOGUE)
     leaders = sorted(lead)
-    size = 1
-    while size < len(leaders) * 2: size *= 2
-    table = [None] * size
-    for idx, pc in enumerate(leaders):
-        h = ((pc >> 1) * 2654435761) & 0xffffffff
-        h = (h >> 16) & (size - 1)
-        while table[h] is not None: h = (h + 1) & (size - 1)
-        table[h] = (pc, idx)
-    w('#define RC_HASH_SIZE %d' % size)
-    w('static const u32 rc_hash_pc[RC_HASH_SIZE] = {')
+    if leaders and leaders[-1] >= len(rom) * 2:
+        raise Exception('a block entry outside the ROM: %06x' % leaders[-1])
+    # The entries in ROM as a sorted list; md_rc_init hashes them into RAM at boot (an
+    # 8192-entry table, a multiply-free hash: the i960 takes 18 cycles a multiply) and maps
+    # them, so the interpreter asks md_rc_run only at a PC it has (md_rc_entry).
+    w('#define RC_NLEAD %d' % len(leaders))
+    w('static const u32 rc_lead_pc[RC_NLEAD] = {')
     row = []
-    for e in table:
-        row.append(hx(e[0]) if e else '0xffffffffu')
+    for pc in leaders:
+        row.append(hx(pc))
         if len(row) == 12: w('    ' + ', '.join(row) + ','); row = []
     if row: w('    ' + ', '.join(row) + ',')
     w('};')
-    w('static const u16 rc_hash_idx[RC_HASH_SIZE] = {')
-    row = []
-    for e in table:
-        row.append(str(e[1]) if e else '0')
-        if len(row) == 24: w('    ' + ', '.join(row) + ','); row = []
-    if row: w('    ' + ', '.join(row) + ',')
-    w('};')
-    w('#define RC_HASH(pc) ((((u32)(pc) >> 1) * 2654435761u) >> 16 & (RC_HASH_SIZE - 1))')
+    w('#define RC_HASH_SIZE 8192')
+    w('#define RC_HASH(pc) ((((u32)(pc) >> 1) ^ ((u32)(pc) >> 7)) & (RC_HASH_SIZE - 1))')
+    w('static u32 rc_hash_pc[RC_HASH_SIZE];')
+    w('static u16 rc_hash_idx[RC_HASH_SIZE];')
+    w('static u32 rc_lead_map[(MD_ROM_WORDS + 31) / 32];   /* a bit per ROM word: a block starts there */')
+    w('static void md_rc_init(void) {')
+    w('    u32 i, h;')
+    w('    for (i = 0; i < RC_HASH_SIZE; i++) rc_hash_pc[i] = 0xffffffffu;')
+    w('    for (i = 0; i < RC_NLEAD; i++) {')
+    w('        u32 pc = rc_lead_pc[i];')
+    w('        for (h = RC_HASH(pc); rc_hash_pc[h] != 0xffffffffu; h = (h + 1) & (RC_HASH_SIZE - 1)) ;')
+    w('        rc_hash_pc[h] = pc; rc_hash_idx[h] = (u16)i;')
+    w('        rc_lead_map[pc >> 6] |= 1u << ((pc >> 1) & 31);')
+    w('    }')
+    w('}')
+    w('#define md_rc_entry(pc) ((u32)(pc) < (MD_ROM_WORDS << 1) && ((rc_lead_map[(u32)(pc) >> 6] >> (((u32)(pc) >> 1) & 31)) & 1))')
     w('')
     w('/* run translated code from m68k.pc; 0 = the PC is not translated (nothing done) */')
     w('static int md_rc_run(void) {')
@@ -961,7 +966,7 @@ def main():
     text = '\n'.join(out) + '\n'
     text = re.sub(r'\b(s32|s16|s8)\b', r'm68k_\1', text)      # the core's signed types
     with open(a.out, 'w') as f: f.write(text)
-    print('%d leaders, hash %d -> %s' % (len(leaders), size, a.out), file=sys.stderr)
+    print('%d leaders -> %s' % (len(leaders), a.out), file=sys.stderr)
 
 
 if __name__ == '__main__':
