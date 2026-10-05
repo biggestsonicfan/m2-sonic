@@ -2,15 +2,16 @@
  * mds24.c — check src/md_s24.h on the host: run the game (src/md_hw.h), let md_s24.h build
  * the System 24 tile / char / palette RAM in arrays, draw those as MAME's model2
  * screen_update + segaic24 do (window masks, per-line scroll, opaque layer B, the two
- * priority passes), and compare the 320x224 picture with the reference renderer
- * (src/md_render.h), pixel for pixel.
+ * priority passes, the sprite polygons between them), and compare the 320x224 picture with
+ * the reference renderer (src/md_render.h), pixel for pixel.
  *
  *   cc -O2 -Isrc -I../m2-sdk/src -o mds24 tools/mds24.c      (m2font.h from the SDK)
  *   ./mds24 [-f frames] [-p frame,prefix]... [-i frame:pad]... [-e every]
  *
  *   -p F,prefix  after frame F write prefix.m2.ppm (the whole 496x384 Model 2 screen),
  *                prefix.ref.ppm (reference) and prefix.diff.ppm (differences in red)
- *   -e N         compare every N frames and print the number of differing pixels
+ *   -e N         compare every N frames and print the number of differing pixels, the
+ *                polygons, the cells uploaded to the atlas and the cells demoted
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,32 @@ typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32;
 #include "md_render.h"
 
 static u16 tile_ram[0x8000], char_ram[0x40000], pal_ram[0x1000];
+
+/* the GEO side (sonic.c gives these to m2_sprite.h): a texture atlas of pens, the polygon
+ * list being built and the one committed, the colour rows the polygons use */
+typedef struct { short x, y, w, h, tu, tv; u8 flip, line, layer; } gquad_t;
+static u8 atlas[1024][1024];
+static gquad_t q_new[4096], q_shown[4096];
+static int nq_new, nq_shown, nq_max;
+static u16 gpu_pal[4][16];
+static void gpu_cell(u32 tx, u32 ty, const u32 *rows) {
+    int r, c;
+    for (r = 0; r < 8; r++) for (c = 0; c < 8; c++) atlas[ty + r][tx + c] = (u8)((rows[r] >> (28 - 4 * c)) & 15);
+}
+static void gpu_quad(int x, int y, int w, int h, u32 tu, u32 tv, u32 flip, u32 line, int layer) {
+    gquad_t q = { (short)x, (short)y, (short)w, (short)h, (short)tu, (short)tv, (u8)flip, (u8)line, (u8)layer };
+    if (nq_new < 4096) q_new[nq_new++] = q;
+}
+static void gpu_commit(void) {
+    memcpy(q_shown, q_new, sizeof(gquad_t) * (size_t)nq_new);
+    nq_shown = nq_new;
+    if (nq_new > nq_max) nq_max = nq_new;
+}
+#define S24_GPU_BEGIN()                          (nq_new = 0)
+#define S24_GPU_CELL(tx, ty, rows)               gpu_cell(tx, ty, rows)
+#define S24_GPU_QUAD(x, y, w, h, tu, tv, f, l, z) gpu_quad(x, y, w, h, tu, tv, f, l, z)
+#define S24_GPU_PEN(line, pen, c)                (gpu_pal[line][pen] = (c))
+#define S24_GPU_COMMIT()                         gpu_commit()
 #define S24_TILE tile_ram
 #define S24_CHAR char_ram
 #define S24_PAL  pal_ram
@@ -53,8 +80,30 @@ static int layer_pix(int layer, int x, int y) {
     return (int)(((u32)(e >> 15) << 16) | (pen ? 0 : 0x8000) | (bank * 16 + pen));
 }
 
+static int poly[224][320];                             /* the polygons' pixels, -1 = none */
+
+static void draw_polys(void) {
+    int i, x, y, z;
+    for (y = 0; y < 224; y++) for (x = 0; x < 320; x++) poly[y][x] = -1;
+    for (z = 0; z < 4; z++)
+        for (i = 0; i < nq_shown; i++) {
+            const gquad_t *q = &q_shown[i];
+            if (q->layer != z) continue;
+            for (y = 0; y < q->h; y++)
+                for (x = 0; x < q->w; x++) {
+                    int u = (q->flip & 1) ? q->tu + q->w - 1 - x : q->tu + x;
+                    int v = (q->flip & 2) ? q->tv + q->h - 1 - y : q->tv + y;
+                    u8 pen = atlas[v][u];
+                    if (!pen) continue;
+                    if (q->y + y < 0 || q->y + y >= 224 || q->x + x < 0 || q->x + x >= 320) { printf("quad off screen\n"); continue; }
+                    poly[q->y + y][q->x + x] = gpu_pal[q->line][pen];
+                }
+        }
+}
+
 static void draw_m2(void) {
     int x, y, l, pass;
+    draw_polys();
     for (y = 0; y < 384; y++)
         for (x = 0; x < 496; x++) {
             u32 c = bgr555_rgb(pal_ram[0]);
@@ -67,6 +116,9 @@ static void draw_m2(void) {
                         if (l >= 2) c = bgr555_rgb(pal_ram[p & 0xfff]);
                         else if (!(p & 0x8000) && !(p >> 16)) c = bgr555_rgb(pal_ram[p & 0xfff]);
                     } else if (!(p & 0x8000) && (p >> 16)) c = bgr555_rgb(pal_ram[p & 0xfff]);
+                    if (pass == 0 && l == 0 && y >= S24_Y0 && y < S24_Y0 + 224 && x >= S24_X0 && x < S24_X0 + 320
+                        && poly[y - S24_Y0][x - S24_X0] >= 0)
+                        c = bgr555_rgb((u16)poly[y - S24_Y0][x - S24_X0]);
                 }
             screen[y][x] = c;
         }
@@ -116,8 +168,8 @@ int main(int argc, char **argv) {
         md_frame();
         s24_update();
         if (every && f % every == 0)
-            printf("frame %5d: %6d pixels differ, %3u composite cells, %2d banks, %2d char groups\n",
-                   f, compare(), s24_ncomposited, s24_nbanks, s24_ngroups);
+            printf("frame %5d: %6d pixels differ, %3u polygons (most %d), %3u cells uploaded, %2u demoted, %2d char groups\n",
+                   f, compare(), s24_nquads, nq_max, s24_nuploads, s24_ndem[0] + s24_ndem[1], s24_ngroups);
         for (i = 0; i < np; i++) if (pf[i] == f) {
             int n = compare();
             snprintf(name, sizeof name, "%s.m2.ppm", pp[i]); ppm(name, 496, 384, m2_rgb);
