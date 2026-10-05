@@ -33,6 +33,16 @@
 #define md_rom ((const u16 *)MD_ROM_AT)
 
 static u32 md_insns;                    /* 68000 instructions run (the panel's statistics) */
+
+/* Wait until the vblank counter moves off v. Written out so it is the two-instruction loop
+ * (an absolute load, a compare-and-branch back to it) that m2-hle2 skips on its cycle clock
+ * (m2_spin.h); gcc reads frameVBL through a register, and that loop it runs one instruction
+ * at a time: a quarter of the i960's time on m2-hle2's Dreamcast port (Pinboard #481). */
+_Static_assert(M2_FRAMEVBL_ADDR == 0x005F00F0u, "vbl_wait loads frameVBL by address");
+static inline void vbl_wait(u32 v) {
+    u32 t;
+    __asm__ volatile ("1:\tld 0x5F00F0,%0\n\tcmpobe %0,%1,1b" : "=&r"(t) : "r"(v) : "cc", "memory");
+}
 #if __has_include("sonic_recomp.h") && !defined(SONIC_NO_RECOMP)
 #define SONIC_RECOMP 1
 #define MD_RECOMP "sonic_recomp.h"      /* tools/m68krecomp.py: md_rc_run ahead of the interpreter */
@@ -147,11 +157,11 @@ int main(void) {
     geo_initialize();
     m2_spr_palette_init();
     {
-        u32 l, v;
+        u32 l;
         for (l = 0; l < 4; l++) m2_spr_palette(S24_CB0 + l, l + 1u);
         for (l = 0; l < 4; l++) {       /* prime it with empty lists */
             S24_GPU_BEGIN(); S24_GPU_COMMIT();
-            v = frameVBL; while (frameVBL == v) { }
+            vbl_wait(frameVBL);
         }
     }
 
@@ -233,7 +243,7 @@ int main(void) {
              * the interrupt in between. */
             v = frameVBL; since = 0xffffffffu - M2_TIMER2;
             if (since >= M2_FRAME_T - 3000u || (since >= M2_DRAW_T && since + est > M2_FRAME_T + M2_DRAW_T))
-                while (frameVBL == v) { }
+                vbl_wait(v);
             while (0xffffffffu - M2_TIMER2 < M2_DRAW_T + 1000u) { }
             ts = M2_TIMER3;
             sonic_busy = 2;             /* ... and now going on screen */

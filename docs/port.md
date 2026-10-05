@@ -56,7 +56,10 @@
   (`s24_swap_cost` plus its recent error) would span that moment.
 - **Timing:** the Mega Drive runs at 59.92 Hz, the Model 2 at 57.52 Hz; each vblank runs the
   frames due (up to 4) and draws once, so busy scenes draw fewer pictures instead of slowing
-  down.
+  down. The waits for the vblank are `vbl_wait`, an absolute load and a compare-and-branch
+  back to it, written in assembly because gcc keeps `frameVBL`'s address in a register.
+  m2-hle2 skips a loop of that shape on its cycle clock instead of running it (`m2_spin.h`);
+  on its Dreamcast port the plain C loop was a quarter of the i960's time.
 - **Sound:** the serial line to the sound board carries ~50 bytes a frame, so the chips are
   re-voiced, not emulated (`src/md_snd.h`): each FM channel plays a wavetable of its
   instrument rendered on the i960 (all 8 algorithms, feedback, multipliers; modulators at
