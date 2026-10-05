@@ -2,8 +2,8 @@
 
 Sega's **Sonic the Hedgehog** (Mega Drive) running on a **Sega Model 2B** board: MAME's Mega
 Drive, as far as Sonic needs it, ported to the board's Intel i960KB, with the 68000
-emulated (and its hot code statically recompiled), the picture on the Model 2's tilemaps
-and the music re-voiced on its SCSP. It runs as a replacement for Sonic the Fighters
+emulated (and its hot code statically recompiled), the planes on the Model 2's tilemaps,
+the sprites as polygons its GEO draws, and the music re-voiced on its SCSP. It runs as a replacement for Sonic the Fighters
 (`sfight`): five EPROMs are swapped, everything else on the board, or in the romset, is
 stock.
 
@@ -11,7 +11,8 @@ This repository has the port and its documentation: the game (`src/`), its 68000
 the Mega Drive board, video and sound, the sound board program (`snd/`, Pac-Man's SCSP
 relay) and the tools (`tools/`). It is built against
 [m2-sdk](https://github.com/biggestsonicfan/m2-sdk), the bare Model 2 homebrew SDK
-(headers, i960 boot code, linker script), checked out beside this repository, like
+(headers, i960 boot code, linker script; the sprites need `m2_sprite.h` with its palette
+mode), checked out beside this repository, like
 [m2-pacman](https://github.com/biggestsonicfan/m2-pacman).
 
 - [docs/port.md](docs/port.md): how it works (68000 core and recompiler, board, tilemap

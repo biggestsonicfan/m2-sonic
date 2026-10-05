@@ -6,8 +6,8 @@
  * recompiled when src/sonic_recomp.h exists, tools/m68krecomp.py); the rest of the console
  * as far as the game sees it (memory map, VDP ports, DMA, interrupts, pads) is
  * src/md_hw.h. The picture goes onto the Model 2's System 24 tilemaps (src/md_s24.h):
- * plane B and plane A on the two scrolling layers, the sprites composited into plane A's
- * cells. The 320x224 screen sits in the middle of the 496x384 one.
+ * plane B and plane A on the two scrolling layers, the sprites as textured GEO polygons
+ * between them (m2_sprite.h). The 320x224 screen sits in the middle of the 496x384 one.
  * The sound board's own 68000 runs the SCSP relay of Pac-Man (snd/scsp_passthru.s): the
  * i960 re-voices the YM2612 and PSG on the SCSP through it (src/md_snd.h). With the stock
  * sound EPROM the game runs silent ("NO SOUND" on the panel).
@@ -43,6 +43,26 @@ static u32 md_insns;                    /* 68000 instructions run (the panel's s
 
 #include "m2_scsp.h"
 #include "md_snd.h"                     /* YM2612 + PSG re-voiced on the SCSP */
+
+/* The sprites are GEO polygons (m2_sprite.h palette mode, src/md_s24.h s24_sprites): a
+ * 1024x1024 texture atlas of sprite images at texture RAM (0,0), palette line l = colorbase
+ * S24_CB0 + l with colour table row l + 1. The channel ramp is the tile palette's
+ * (sonic_tilepal_ramp). Runs on MAME's GEO (not the real one: no SHARC boot). */
+#define M2_SPR_TEX_X     0u
+#define M2_SPR_TEX_Y     0u
+#define M2_SPR_TEX_LOG2W 5u
+#define M2_SPR_TEX_LOG2H 5u
+#define M2_SPR_MAX       1
+#define M2_SPR_MAX_MASKS 1
+#define M2_SPR_MAX_QUADS 280             /* ~28 list words each: one 8K-word list buffer */
+#define M2_SPR_XLAT(c)   (64u + ((c) * 191u + 15u) / 31u)
+#include "m2_sprite.h"
+#define S24_CB0 40u
+#define S24_GPU_BEGIN()                          do { m2_frame_begin(); m2_spr_frame_setup(); } while (0)
+#define S24_GPU_CELL(tx, ty, rows)               m2_spr_tex_cell(tx, ty, rows)
+#define S24_GPU_QUAD(x, y, w, h, tu, tv, f, l, z) m2_spr_draw_tex(S24_X0 + (x), S24_Y0 + (y), w, h, tu, tv, f, S24_CB0 + (l), z)
+#define S24_GPU_PEN(l, pen, c)                   m2_spr_palette_pen((l) + 1u, pen, c)
+#define S24_GPU_COMMIT()                         m2_frame_commit()
 
 #define S24_TILE ((volatile u16 *)0x01000000u)
 #define S24_CHAR ((volatile u16 *)0x01080000u)
@@ -115,6 +135,17 @@ int main(void) {
     sonic_tilepal_ramp();
     s24_init();
     md_reset();
+    geo_func();                         /* the GEO's display lists (MAME's own GEO: no firmware) */
+    geo_initialize();
+    m2_spr_palette_init();
+    {
+        u32 l, v;
+        for (l = 0; l < 4; l++) m2_spr_palette(S24_CB0 + l, l + 1u);
+        for (l = 0; l < 4; l++) {       /* prime it with empty lists */
+            S24_GPU_BEGIN(); S24_GPU_COMMIT();
+            v = frameVBL; while (frameVBL == v) { }
+        }
+    }
 
     s24_text(11, 3, "SONIC THE HEDGEHOG");
 #ifdef SONIC_RECOMP
@@ -186,14 +217,16 @@ int main(void) {
             s24_build();
             cost = s24_swap_cost();
             est = cost + swap_err + 4000u;
-            /* The swap must not span the moment the screen is drawn: MAME draws the Model 2's
-             * at the end of vblank (VIDEO_UPDATE_AFTER_VBLANK), M2_DRAW_T after the interrupt.
-             * When it would, wait for that moment to pass. */
+            /* MAME draws the Model 2's screen at the end of vblank (VIDEO_UPDATE_AFTER_VBLANK),
+             * M2_DRAW_T after the interrupt: the tilemaps as they are then, and the polygon list
+             * the GEO took at the interrupt, with the colours as they are then. So the swap goes
+             * after a draw (its colours would show on the old list's sprites before) and ends
+             * before the next (or the screen mixes two frames), and the list is committed before
+             * the interrupt in between. */
             v = frameVBL; since = 0xffffffffu - M2_TIMER2;
-            if (since < M2_DRAW_T ? since + est > M2_DRAW_T : since + est > M2_FRAME_T + M2_DRAW_T) {
-                if (since >= M2_DRAW_T) while (frameVBL == v) { }
-                while (0xffffffffu - M2_TIMER2 < M2_DRAW_T + 1000u) { }
-            }
+            if (since >= M2_FRAME_T - 3000u || (since >= M2_DRAW_T && since + est > M2_FRAME_T + M2_DRAW_T))
+                while (frameVBL == v) { }
+            while (0xffffffffu - M2_TIMER2 < M2_DRAW_T + 1000u) { }
             ts = M2_TIMER3;
             sonic_busy = 2;             /* ... and now going on screen */
             s24_swap();

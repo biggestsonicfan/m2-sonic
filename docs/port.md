@@ -35,16 +35,22 @@
   it the port still draws as many pictures (1003 in 3000 frames; 985 before).
 - **Video:** `src/md_s24.h` puts the picture on the Model 2's System 24 tilemaps: plane B and
   plane A on the two scrolling layers (the hardware does the per-line scroll), each
-  (pattern, flip, palette line) as its own char (the char number fixes the palette), the
-  sprites composited into plane A's cells: one-line cells as they are, mixed ones with their
-  colours in shared 15-colour banks (a rare cell of more than 15 takes the nearest). The
-  sprites follow MAME's line rules: its masking (a sprite at x = 0 and one at 0 < x < 0x40)
-  and 320 sprite pixels a line. Composites are built in one half of a group pool while
-  the other half is on screen. The 320x224 picture is at (88,80) of
-  the 496x384 screen. A picture is built (`s24_build`: scroll values, sprites, composites)
-  without touching what is shown, then put on screen in one pass (`s24_swap`: patterns,
-  name tables, colours, scroll, composites), so the HUD (sprites composited into scrolling
-  plane A) never meets a scroll of another frame. MAME draws the screen at the end of
+  (pattern, flip, palette line) as its own char (the char number fixes the palette). The
+  sprites are textured polygons the GEO draws (the SDK's `m2_sprite.h`, palette mode): each
+  sprite image is uploaded once to a 1024x1024 atlas of 32x32 slots in texture RAM, again
+  only when one of its patterns changes, and drawn as one quad with the flips in its texture
+  coordinates and its palette line as a 16-colour row. MAME draws the polygons between the
+  tilemaps' low and high passes, which is where a low-priority sprite goes. A high-priority
+  sprite over a high-priority cell of plane A or B gets the cell demoted for that picture:
+  its name entries lose the priority bit and the cell is drawn again as a polygon under the
+  high-priority sprites. Between sprites the list order decides, so a low-priority sprite
+  over a later one on the high layer goes on that layer too. The sprites follow MAME's line
+  rules: its masking (a sprite at x = 0 and one at 0 < x < 0x40) and 320 sprite pixels a
+  line (a cut sprite is a polygon per run of lines). The 320x224 picture is at (88,80) of
+  the 496x384 screen. A picture is built (`s24_build`: scroll values, the polygon list)
+  without touching what is shown, then put on screen in one pass (`s24_swap`: the polygon
+  list committed, sprite colours, patterns, name tables, demoted cells, colours, scroll), so
+  the HUD (sprites) never meets a scroll of another frame. MAME draws the screen at the end of
   vblank, 41000 timer ticks after the interrupt; timer 2, reloaded at each vblank
   (`src/i_handle.s`), says where the i960 is, and `sonic.c` waits when the swap
   (`s24_swap_cost` plus its recent error) would span that moment.
@@ -71,9 +77,9 @@
 | 68000 timing | `tools/optiming/run.sh`: a test cartridge runs every legal opcode with each addressing mode on the port's core and on MAME's Mega Drive; per-instruction times compared | all equal except 73 `-(An)` cases, where an earlier illegal opcode MAME traps left different data; MUL/DIV: 1920 operand pairs equal |
 | whole machine | `tools/mdlockstep`: against MAME's own Mega Drive, frame by frame | [lockstep.md](lockstep.md) |
 | recompiled code | `m68krecomp.py --exact` vs the interpreter, RAM per frame (`mdhost -m`) | identical, 7 zones x 2500 frames |
-| System 24 video | `tools/mds24.c`: the tile/char/palette RAM drawn as MAME's `model2_v.cpp` + `segaic24.cpp` compose it, against a reference renderer (`src/md_render.h`) | 0 pixels differ in 596 of 600 sampled frames (20 zones); 14 pixels in the other 4 (sprite priority, below) |
+| System 24 video | `tools/mds24.c`: the tile/char/palette RAM drawn as MAME's `model2_v.cpp` + `segaic24.cpp` compose it, against a reference renderer (`src/md_render.h`) | the polygons drawn as MAME draws them, between the passes: 3000 frames of 9 zones each, every frame compared: 0 pixels differ in 7 zones; Labyrinth 150 frames (78 pixels at worst), Marble 61 (119) (sprite priority, below). The MAME pictures equal the host's, pixel for pixel, at 8 sampled frames of the attract mode |
 | sound | ymfm (MAME's YM2612) rendering the same register writes vs MAME's recording of the Model 2 | the pitches agree (e.g. 98/100, 247/246, 488/492 Hz) |
-| MAME | native and web (Pinboard) Model 2 builds; game speed and pictures per 300 frames from a Lua script | play (the lockstep's input script, 3000 frames): 98% game speed, 36 pictures/s; attract mode (6000 frames): 95.7%, 26.7 pictures/s, 79% at worst (Spring Yard, Marble Zone; 93.5%, 25.2, 73% with 4200 instructions recompiled) |
+| MAME | native and web (Pinboard) Model 2 builds; game speed and pictures per 300 frames from a Lua script | play (the lockstep's input script, 3000 frames): 98% game speed, 36 pictures/s; attract mode (6000 frames): 98.9%, 45 pictures/s, 95% at worst (95.7%, 26.7 pictures/s and 79% with the sprites composited into plane A by the i960) |
 
 `tools/mdhost.c` runs the whole thing on a PC (pictures, RAM, profiles; `-t` a per-instruction
 time trace); `tools/m68k_cyc.c` makes the cycle table from Musashi and
@@ -82,20 +88,24 @@ output against the reference renderer.
 
 ## Not done / known differences
 
-- Sprites keep one priority bit per 8x8 cell: where a sprite meets plane B's high-priority
-  pixels it can be wrong (a few pixels, rarely).
+- Sprite priority is per polygon and per 8x8 cell, not per pixel: wrong where a demoted
+  cell is over a low-priority sprite that went on the high layer (a ring or bubble in front
+  of a block or a sparkle), and where a demoted cell of plane A reaches past its sprite over
+  plane B's high-priority pixels (Labyrinth and Marble Zone, up to ~120 pixels in some
+  frames; the other zones none).
 - Per-line palette changes (Labyrinth Zone's water colours) are not shown: one palette per
-  frame. No window plane, shadow/highlight or sprite line limits (Sonic 1 doesn't need them).
+  frame. No window plane or shadow/highlight (Sonic 1 doesn't use them).
 - Sound: FM detune, LFO, SSG-EG and envelope curves are approximate; the SEGA voice at boot
   (the Z80 plays it from the cartridge; the port has no Z80, only its timing) is silent; the timpani uploads last (~20 s after boot).
 - A swap that rewrites the whole name table (the title card) takes longer than vblank, so
   that one screen is torn.
-- Busy scenes (Marble Zone, Spring Yard) run slow: 79-96% game speed at 12-17 pictures a
-  second. There the 68000 takes about 40% of the i960 (recompiled code 32%, the interpreter
-  8%, measured with 4200 instructions recompiled) and the sprite composites (`s24_sprites`, `s24_composite`, `s24_rec`) about 32%; the
-  sound and the Z80 timing 1-2%. No single line is above 1.3%. What made it cheaper: MAME's
-  i960 charges 18 cycles a multiply (`mulo`) and 4 a load, so the composite records are 128
-  bytes (indexed by a shift), char RAM rows are one 32-bit store, and the recompiler's
+- Busy scenes (Marble Zone, Spring Yard) still drop pictures: 95-99% game speed at 20-40
+  pictures a second. The 68000 is most of the i960's time there; the sprites, now polygons,
+  cost the i960 a list of quads and the uploads of new images (before, compositing them
+  into plane A's cells took about a third of it: 79-96% at 12-17 pictures a second). The
+  sound and the Z80 timing take 1-2%. What made it cheaper: MAME's
+  i960 charges 18 cycles a multiply (`mulo`) and 4 a load, so char RAM rows are one
+  32-bit store, and the recompiler's
   dispatch hash is `(pc>>1)^(pc>>7)` in RAM with a bitmap of block entries the run loop
   checks before calling `md_rc_run`. Switches for trying it
   (`-DSONIC_DEFS="..."` to cmake): `MD_CATCH_UP=8` (up to 8 frames between pictures, default
