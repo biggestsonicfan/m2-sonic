@@ -127,6 +127,14 @@ static void num(char *s, u32 v, int w) {
     s[w] = 0;
 }
 
+/* The panel round the picture. -DSONIC_NO_PANEL leaves it out: the game alone (the
+ * Dreamcast disc). */
+#ifdef SONIC_NO_PANEL
+#define panel_text(x, y, s) ((void)0)
+#else
+#define panel_text(x, y, s) s24_text(x, y, s)
+#endif
+
 int main(void) {
     u32 seen, t0, frames = 0, draws = 0, tick = 0, due = 0, ins0 = 0;
     char buf[12];
@@ -147,21 +155,21 @@ int main(void) {
         }
     }
 
-    s24_text(11, 3, "SONIC THE HEDGEHOG");
+    panel_text(11, 3, "SONIC THE HEDGEHOG");
 #ifdef SONIC_RECOMP
-    s24_text(11, 5, "68000 ON I960, RECOMPILED");
+    panel_text(11, 5, "68000 ON I960, RECOMPILED");
 #else
-    s24_text(11, 5, "68000 ON I960");
+    panel_text(11, 5, "68000 ON I960");
 #endif
-    s24_text(11, 40, "SPEED");
-    s24_text(28, 40, "DRAWN/S");
-    s24_text(11, 42, "68K K");
-    s24_text(28, 42, "VIDEO K");
-    s24_text(11, 44, "68K/FRAME");
+    panel_text(11, 40, "SPEED");
+    panel_text(28, 40, "DRAWN/S");
+    panel_text(11, 42, "68K K");
+    panel_text(28, 42, "VIDEO K");
+    panel_text(11, 44, "68K/FRAME");
 #ifndef SONIC_NO_SOUND                  /* -DSONIC_NO_SOUND: silent, as with the stock sound EPROM */
     snd_init();                         /* waits up to 1.5 s for the relay to answer */
 #endif
-    s24_text(11, 7, snd_ok ? "SCSP SOUND" : "NO SOUND");
+    panel_text(11, 7, snd_ok ? "SCSP SOUND" : "NO SOUND");
     M2_TIMER3 = 0xffffffffu;
 
 #ifdef SONIC_BENCH_FRAMES
@@ -241,12 +249,12 @@ int main(void) {
             u32 el = frameVBL - t0;
             num(buf, frames * (100000u * (M2_HZ / 8u) / (MD_HZ / 8u)) / (el * 1000u), 3);
             buf[3] = '%'; buf[4] = 0;
-            s24_text(17, 40, buf);
-            num(buf, draws * M2_HZ / (el * 1000u), 3); s24_text(38, 40, buf);
+            panel_text(17, 40, buf);
+            num(buf, draws * M2_HZ / (el * 1000u), 3); panel_text(38, 40, buf);
             /* i960 cycles per Mega Drive frame / per picture, in thousands (417 = all of it) */
-            num(buf, t_cpu / 1000u / (frames ? frames : 1), 4); s24_text(17, 42, buf);
-            num(buf, t_vid / 1000u / (draws ? draws : 1), 4); s24_text(38, 42, buf);
-            num(buf, (md_insns - ins0) / (frames ? frames : 1), 6); s24_text(21, 44, buf);
+            num(buf, t_cpu / 1000u / (frames ? frames : 1), 4); panel_text(17, 42, buf);
+            num(buf, t_vid / 1000u / (draws ? draws : 1), 4); panel_text(38, 42, buf);
+            num(buf, (md_insns - ins0) / (frames ? frames : 1), 6); panel_text(21, 44, buf);
             M2_TIMER3 = 0xffffffffu;
             frames = draws = 0; t0 = frameVBL; ins0 = md_insns; t_cpu = t_vid = 0;
         }
